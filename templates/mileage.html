@@ -11,12 +11,12 @@
   <p>Road miles are looked up <b>once</b> per pair and stored. New locations or lanes only add the pairs that are new.
      Drive time = miles ÷ {{ speed }} mph (your average speed from Settings), not Google's estimate.</p>
   <form method="post" action="/mileage/fetch" style="display:inline">
-    <button type="submit" {% if not has_key %}disabled title="Add GOOGLE_MAPS_API_KEY under Secrets first"{% endif %}>Fetch missing pairs from Google ({{ cov.missing }})</button>
+    <button type="submit" {% if not has_key %}disabled title="Add GOOGLE_MAPS_API_KEY under Secrets first"{% endif %}>Fetch missing pairs from Google ({{ cov.missing }} left, up to 1,500 per click)</button>
   </form>
   <form method="post" action="/mileage/straight" style="display:inline">
     <button type="submit" class="secondary">Estimate missing as straight-line × 1.3 (temporary)</button>
   </form>
-  {% if not has_key %}<p class="muted">Google key not found. Add <code>GOOGLE_MAPS_API_KEY</code> in Replit → Secrets, then restart the app.</p>{% endif %}
+  {% if not has_key %}<p class="muted">Google key not found. Add <code>GOOGLE_MAPS_API_KEY</code> under Environment in Render.</p>{% endif %}
 </div>
 
 <h2>Look up or override a pair</h2>

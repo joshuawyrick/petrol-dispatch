@@ -3,7 +3,7 @@
 Every pair is looked up once and stored in the `distances` table. A dispatcher can override any pair with
 approved-route miles (hazmat / heavy-truck routes) and the override always wins.
 """
-import math, os
+import math, os, time
 from datetime import datetime
 import httpx
 from sqlalchemy.orm import Session
@@ -11,6 +11,8 @@ from db import Location, Lane, Distance
 
 ROUTES_URL = "https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix"
 MAX_ELEMENTS = 625          # Google's limit per request (origins x destinations)
+ELEMENTS_PER_MINUTE = 2400  # stay under Google's default 3,000 elements/minute quota
+PAIRS_PER_CLICK = 1500      # one button click fetches at most this many pairs (keeps the web request short)
 STRAIGHT_LINE_FACTOR = 1.30 # road miles are typically ~30% longer than straight-line in this territory
 
 
@@ -40,7 +42,7 @@ def needed_pairs(s: Session):
 def coverage(s: Session):
     pairs = needed_pairs(s)
     have = {(d.origin_id, d.dest_id) for d in s.query(Distance).all()
-            if d.override_miles or (d.google_miles and d.source == "google")}
+            if d.override_miles or (d.google_miles is not None and d.source == "google")}
     missing = [p for p in pairs if p not in have]
     return {"needed": len(pairs), "have": len(pairs) - len(missing), "missing": len(missing), "missing_pairs": missing}
 
@@ -76,41 +78,58 @@ def _waypoint(loc: Location):
     return {"waypoint": {"location": {"latLng": {"latitude": loc.lat, "longitude": loc.lon}}}}
 
 
-def fetch_from_google(s: Session, api_key: str, max_pairs: int | None = None):
-    """Look up every missing pair with Google's Routes API (compute route matrix) and store the results."""
+def fetch_from_google(s: Session, api_key: str, max_pairs: int | None = PAIRS_PER_CLICK):
+    """Look up missing pairs with Google's Routes API (compute route matrix) and store the results.
+
+    Throttled to stay under Google's per-minute element quota, with automatic retry on HTTP 429.
+    Fetches at most `max_pairs` per call so a single button click finishes in well under a minute.
+    """
     if not api_key:
-        return {"error": "GOOGLE_MAPS_API_KEY is not set (add it under Secrets in Replit)."}
+        return {"error": "GOOGLE_MAPS_API_KEY is not set (add it under Environment in Render)."}
     cov = coverage(s)
     missing = cov["missing_pairs"]
     if max_pairs: missing = missing[:max_pairs]
     if not missing:
-        return {"fetched": 0, "requests": 0, "errors": []}
+        return {"fetched": 0, "requests": 0, "errors": [], "remaining": 0}
     locs = {l.id: l for l in s.query(Location).all()}
     existing = {(d.origin_id, d.dest_id): d for d in s.query(Distance).all()}
     by_origin = {}
     for o, d in missing: by_origin.setdefault(o, []).append(d)
 
-    fetched, requests_made, errors = 0, 0, []
+    fetched, requests_made, errors, no_route = 0, 0, [], 0
     headers = {"X-Goog-Api-Key": api_key,
                "X-Goog-FieldMask": "originIndex,destinationIndex,distanceMeters,duration,condition"}
+    window_start, window_elements = time.time(), 0
     with httpx.Client(timeout=60) as client:
         for o, dests in by_origin.items():
             for i in range(0, len(dests), MAX_ELEMENTS):
                 chunk = dests[i:i + MAX_ELEMENTS]
+                # --- throttle: never send more than ELEMENTS_PER_MINUTE in any rolling minute ---
+                if window_elements + len(chunk) > ELEMENTS_PER_MINUTE:
+                    time.sleep(max(0.0, 60 - (time.time() - window_start)))
+                    window_start, window_elements = time.time(), 0
+                window_elements += len(chunk)
                 body = {"origins": [_waypoint(locs[o])], "destinations": [_waypoint(locs[d]) for d in chunk],
                         "travelMode": "DRIVE", "routingPreference": "TRAFFIC_UNAWARE"}
                 try:
-                    r = client.post(ROUTES_URL, json=body, headers=headers)
-                    requests_made += 1
+                    r = None
+                    for attempt in range(5):                      # retry on rate limiting
+                        r = client.post(ROUTES_URL, json=body, headers=headers)
+                        requests_made += 1
+                        if r.status_code != 429: break
+                        time.sleep(5 * (attempt + 1))
                     if r.status_code != 200:
-                        errors.append(f"{locs[o].name}: HTTP {r.status_code} {r.text[:200]}")
-                        if r.status_code in (401, 403): return {"fetched": fetched, "requests": requests_made, "errors": errors}
+                        errors.append(f"{locs[o].name}: HTTP {r.status_code} {r.text[:160]}")
+                        if r.status_code in (401, 403):
+                            return {"fetched": fetched, "requests": requests_made, "errors": errors, "remaining": coverage(s)["missing"]}
                         continue
                     for el in r.json():
-                        if el.get("condition") != "ROUTE_EXISTS": continue
-                        d = chunk[el["destinationIndex"]]
-                        miles = round(el["distanceMeters"] / 1609.344, 1)
-                        minutes = round(float(el["duration"].rstrip("s")) / 60, 1)
+                        d = chunk[el.get("destinationIndex", 0)]
+                        if el.get("condition") != "ROUTE_EXISTS":
+                            no_route += 1; continue
+                        # Google omits zero-valued fields, so two points at the same spot come back without distanceMeters
+                        miles = round(el.get("distanceMeters", 0) / 1609.344, 1)
+                        minutes = round(float(str(el.get("duration", "0s")).rstrip("s")) / 60, 1)
                         row = existing.get((o, d))
                         if row:
                             row.google_miles, row.google_minutes, row.source, row.fetched_at = miles, minutes, "google", datetime.utcnow()
@@ -121,8 +140,9 @@ def fetch_from_google(s: Session, api_key: str, max_pairs: int | None = None):
                         fetched += 1
                     s.commit()
                 except Exception as e:  # network hiccup: record and keep going
-                    errors.append(f"{locs[o].name}: {e}")
-    return {"fetched": fetched, "requests": requests_made, "errors": errors}
+                    errors.append(f"{locs[o].name}: {type(e).__name__} {e}")
+    if no_route: errors.append(f"{no_route} pair(s) had no drivable route per Google (use straight-line estimate or an override for those)")
+    return {"fetched": fetched, "requests": requests_made, "errors": errors, "remaining": coverage(s)["missing"]}
 
 
 def get_api_key():

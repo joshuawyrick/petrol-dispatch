@@ -201,8 +201,9 @@ def mileage_fetch(s: Session = Depends(get_db)):
     res = mileage.fetch_from_google(s, mileage.get_api_key())
     if "error" in res:
         return RedirectResponse(f"/mileage?msg={res['error']}", status_code=303)
-    msg = f"Google returned {res['fetched']} pairs in {res['requests']} requests."
-    if res["errors"]: msg += f" {len(res['errors'])} problem(s): " + " | ".join(res["errors"][:3])
+    msg = f"Google returned {res['fetched']} pairs in {res['requests']} requests. {res['remaining']} still missing"
+    msg += " — click Fetch again to continue." if res["remaining"] else "."
+    if res["errors"]: msg += f" {len(res['errors'])} note(s): " + " | ".join(res["errors"][:3])
     return RedirectResponse(f"/mileage?msg={msg}", status_code=303)
 
 
