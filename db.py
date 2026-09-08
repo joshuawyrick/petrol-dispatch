@@ -107,6 +107,8 @@ class Driver(Base):
     max_duty_hours = Column(Float)                     # None = Settings default (16)
     days_off = Column(String(60))                      # "Sat,Sun" — regular days off, blank = none
     usual_shift = Column(String(2))                    # "AM" | "PM" | blank
+    samsara_id = Column(String(40))                    # Samsara driver id when synced
+    samsara_vehicle = Column(String(80))               # vehicle name Samsara reports for this driver
     notes = Column(Text)
     yard = relationship("Location", foreign_keys=[yard_id])
 
@@ -124,6 +126,8 @@ class DriverDay(Base):
     drive_hours_left = Column(Float)                   # None = driver default; lets dispatcher cap a tired driver
     duty_hours_left = Column(Float)
     cycle_hours_left = Column(Float)                   # hours left before the 80-hr / 34-hr reset kicks in
+    hos_status = Column(String(30))                    # Samsara duty status at last sync
+    hos_synced_at = Column(DateTime)
     notes = Column(String(200))
     driver = relationship("Driver")
 

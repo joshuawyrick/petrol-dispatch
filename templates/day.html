@@ -62,9 +62,13 @@
 </div>
 
 <h2>2. Drivers available — {{ avail }} of {{ drv_rows|length }}</h2>
+<form method="post" action="/day/{{ plan_date }}/samsara" class="bar">
+  <button type="submit" class="secondary small" {% if not has_samsara %}disabled title="Add SAMSARA_API_TOKEN under Environment in Render"{% endif %}>Pull hours from Samsara</button>
+  <span class="muted">Fills the hours-left columns from each driver's live ELD clocks (for a future date, cycle hours only — drive/shift reset after the 10-hour break).</span>
+</form>
 <form method="post" action="/day/{{ plan_date }}/drivers">
 <div class="wrap"><table>
-<tr><th>Available</th><th>Driver</th><th>Yard</th><th>Truck</th><th>Shift</th><th>Earliest start</th><th class="num">Drive hrs left</th><th class="num">On-duty hrs left</th><th class="num">Cycle hrs left (of {{ st.reset_after_hours|int }})</th><th>Note</th></tr>
+<tr><th>Available</th><th>Driver</th><th>Yard</th><th>Truck</th><th>Shift</th><th>Earliest start</th><th class="num">Drive hrs left</th><th class="num">On-duty hrs left</th><th class="num">Cycle hrs left (of {{ st.reset_after_hours|int }})</th><th>Samsara</th><th>Note</th></tr>
 {% for r in drv_rows %}{% set d = r.d %}{% set x = r.x %}
 <tr {% if not r.available %}class="bad"{% endif %}>
   <td><input type="checkbox" name="avail_{{ d.id }}" value="1" {% if r.available %}checked{% endif %}>{% if r.off_today %} <span class="pill">day off</span>{% endif %}</td>
@@ -76,10 +80,11 @@
   <td class="num"><input type="number" step="0.5" class="w60" name="drive_{{ d.id }}" value="{{ x.drive_hours_left if x and x.drive_hours_left else '' }}" placeholder="{{ d.max_drive_hours or st.max_drive_hours }}"></td>
   <td class="num"><input type="number" step="0.5" class="w60" name="duty_{{ d.id }}" value="{{ x.duty_hours_left if x and x.duty_hours_left else '' }}" placeholder="{{ d.max_duty_hours or st.max_duty_hours }}"></td>
   <td class="num"><input type="number" step="0.5" class="w60" name="cycle_{{ d.id }}" value="{{ x.cycle_hours_left if x and x.cycle_hours_left else '' }}" placeholder="{{ st.reset_after_hours|int }}"></td>
+  <td class="muted">{% if x and x.hos_synced_at %}{{ x.hos_status or '' }} · {{ x.hos_synced_at.strftime('%m/%d %H:%M') }}Z{% endif %}</td>
   <td><input type="text" name="dnote_{{ d.id }}" value="{{ x.notes if x and x.notes else '' }}"></td>
 </tr>
 {% endfor %}
-{% if not drv_rows %}<tr><td colspan="10" class="muted">No active drivers. Add them on the <a href="/drivers">Drivers</a> page.</td></tr>{% endif %}
+{% if not drv_rows %}<tr><td colspan="11" class="muted">No active drivers. Add them on the <a href="/drivers">Drivers</a> page.</td></tr>{% endif %}
 </table></div>
 <p><button type="submit">Save driver availability</button> <span class="muted">Blank hours = the driver's normal limits. Enter lower numbers for a driver who is short on hours today.</span></p>
 </form>

@@ -13,7 +13,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 from db import SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, init_db
 from seed import seed
-import mileage, fsc, optimizer
+import mileage, fsc, optimizer, samsara
 import json
 
 app = FastAPI(title="Petrol Dispatch Optimizer")
@@ -302,7 +302,17 @@ def drivers(request: Request, show_inactive: int = 0, s: Session = Depends(get_d
     if not show_inactive: qry = qry.filter(Driver.active == True)
     rows = sorted(qry.all(), key=lambda d: ((d.yard.name if d.yard else ""), d.name))
     st = settings_dict(s)
-    return render(request, "drivers.html", rows=rows, show_inactive=show_inactive, st=st)
+    return render(request, "drivers.html", rows=rows, show_inactive=show_inactive, st=st, has_samsara=bool(samsara.token()))
+
+
+@app.post("/drivers/samsara")
+def drivers_samsara(s: Session = Depends(get_db)):
+    return RedirectResponse(f"/drivers?msg={samsara.sync_drivers(s)}", status_code=303)
+
+
+@app.post("/day/{plan_date}/samsara")
+def day_samsara(plan_date: str, s: Session = Depends(get_db)):
+    return RedirectResponse(f"/day/{plan_date}?msg={samsara.pull_hos(s, plan_date)}", status_code=303)
 
 
 def _driver_form(request, s, drv):
@@ -369,7 +379,8 @@ def _day_ctx(s: Session, plan_date: str):
     plan = json.loads(latest.result_json) if latest else None
     return dict(plan=plan, plan_row=latest, plan_date=plan_date, weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
-                avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"])
+                avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"],
+                has_samsara=bool(samsara.token()))
 
 
 @app.get("/day", response_class=HTMLResponse)
