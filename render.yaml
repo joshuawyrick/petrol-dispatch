@@ -1,17 +1,23 @@
-# Render.com blueprint: one web service + one Postgres database. Import the repo in Render and it reads this file.
+# Render.com blueprint: one web service + one Postgres database. Render reads this file when you deploy the repo as a Blueprint.
 services:
   - type: web
     name: petrol-dispatch
     runtime: python
+    plan: free
+    region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
       - key: GOOGLE_MAPS_API_KEY
         sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: petrol-dispatch-db
           property: connectionString
+
 databases:
   - name: petrol-dispatch-db
     plan: free
+    region: oregon

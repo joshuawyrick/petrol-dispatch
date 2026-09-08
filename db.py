@@ -9,8 +9,11 @@ from sqlalchemy import (create_engine, Column, Integer, Float, String, Boolean, 
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 DB_URL = os.environ.get("DATABASE_URL", "sqlite:///data/dispatch.db")
-if DB_URL.startswith("postgres://"):            # SQLAlchemy needs the postgresql:// scheme
-    DB_URL = DB_URL.replace("postgres://", "postgresql://", 1)
+# Render gives postgres://... ; SQLAlchemy wants postgresql+psycopg://... (psycopg v3 driver)
+for prefix in ("postgres://", "postgresql://"):
+    if DB_URL.startswith(prefix):
+        DB_URL = "postgresql+psycopg://" + DB_URL[len(prefix):]
+        break
 
 engine = create_engine(DB_URL, connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {},
                        pool_pre_ping=True)
