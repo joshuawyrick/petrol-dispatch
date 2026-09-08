@@ -48,3 +48,10 @@ td input[type=number], td input[type=time], td select, td input[type=text] { pad
 td input.w60 { width:60px; } td input.w80 { width:80px; }
 .tot { font-weight:700; background:#eef1f5; }
 .pri-must { color:#b00020; font-weight:700; } .pri-flexible { color:var(--muted); }
+.ok-n { color:#1a7f37; } .bad-n { color:#b00020; }
+.shift { background:var(--card); border:1px solid var(--line); border-radius:8px; margin:10px 0; overflow:hidden; }
+.shift.unused { opacity:.6; }
+.shift-head { padding:9px 12px; border-bottom:1px solid var(--line); background:#f8f9fb; }
+table.stops td { padding:4px 9px; }
+tr.stop-pickup td { background:#f3faf5; } tr.stop-dropoff td { background:#fff7f0; }
+h3 { font-size:15px; margin:18px 0 8px; }

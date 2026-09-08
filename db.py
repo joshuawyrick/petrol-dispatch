@@ -146,6 +146,17 @@ class LoadRequest(Base):
     lane = relationship("Lane")
 
 
+class Plan(Base):
+    """A saved optimizer result for one plan date (the latest one is shown; older ones are kept)."""
+    __tablename__ = "plans"
+    id = Column(Integer, primary_key=True)
+    plan_date = Column(String(10), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    status = Column(String(20), default="draft")        # draft | final
+    result_json = Column(Text)                           # full result (shifts, stops, totals, unassigned)
+    summary = Column(String(300))
+
+
 def init_db():
     """Create tables, then add any columns that newer versions of the app introduced (simple forward migration)."""
     os.makedirs("data", exist_ok=True)

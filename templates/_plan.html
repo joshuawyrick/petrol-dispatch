@@ -1,0 +1,50 @@
+{# Renders an optimizer result: expects `plan` (dict) and optional `plan_row` #}
+{% set T = plan.totals %}
+<div class="cards">
+  <div class="card"><div class="n">{{ T.loads }}</div><div class="l">Loads planned{% if T.unassigned %} · <span class="pri-must">{{ T.unassigned }} not fitted</span>{% endif %}</div></div>
+  <div class="card"><div class="n">{{ T.drivers_used }} / {{ T.drivers_available }}</div><div class="l">Drivers used</div></div>
+  <div class="card"><div class="n {% if T.per_hour >= T.target %}ok-n{% else %}bad-n{% endif %}">{{ T.per_hour|money }}/hr</div><div class="l">Gross per shift hour, base (target {{ T.target|money }})</div></div>
+  <div class="card"><div class="n">{{ T.per_hour_fsc|money }}/hr</div><div class="l">with fuel surcharge ({{ '%.1f'|format(T.fsc_pct*100) }}%)</div></div>
+  <div class="card"><div class="n">{{ T.revenue|money }}</div><div class="l">Base revenue · {{ T.revenue_fsc|money }} with FSC</div></div>
+  <div class="card"><div class="n">{{ T.profit|money }}</div><div class="l">Profit after driver pay {{ T.driver_pay|money }}, fuel {{ T.fuel|money }}, inspections {{ T.inspection|money }} · {{ T.profit_fsc|money }} with FSC</div></div>
+  <div class="card"><div class="n">{{ '%.1f'|format(T.hours) }} h</div><div class="l">Total shift hours · {{ '%.0f'|format(T.miles) }} miles</div></div>
+</div>
+
+{% for sh in plan.shifts %}
+<div class="shift {% if not sh.used %}unused{% endif %}">
+  <div class="shift-head">
+    <b>{{ sh.driver }}</b> <span class="pill">{{ sh.shift }}</span> {% if sh.truck %}<span class="pill">truck {{ sh.truck }}</span>{% endif %} <span class="muted">{{ sh.yard }}</span>
+    {% if sh.used %}
+      · {{ sh.loads }} load{{ 's' if sh.loads != 1 }} · out {{ sh.start|hm }} back {{ sh.end|hm }} · {{ sh.duty_hours }} h on duty (max {{ sh.duty_cap_h }}) · {{ sh.drive_hours }} h driving (max {{ sh.drive_cap_h }}) · {{ '%.0f'|format(sh.loaded_miles) }} loaded / {{ '%.0f'|format(sh.empty_miles) }} empty mi
+      <span class="{% if sh.meets_target %}ok-n{% else %}bad-n{% endif %}"><b>{{ sh.per_hour|money }}/hr</b></span> base · {{ sh.per_hour_fsc|money }}/hr with FSC · revenue {{ sh.revenue|money }} · profit {{ sh.profit|money }}
+    {% else %}<span class="muted">· not needed today</span>{% endif %}
+  </div>
+  {% if sh.used %}
+  <div class="wrap"><table class="stops">
+  <tr><th>Time</th><th>Stop</th><th>Lane / account</th><th class="num">Miles</th><th class="num">bbl</th><th class="num">Revenue</th><th class="num">with FSC</th></tr>
+  {% for st in sh.stops %}
+  <tr class="stop-{{ st.kind }}">
+    <td>{{ st.arrive|hm }}{% if st.kind != 'yard' %} – {{ st.depart|hm }}{% endif %}</td>
+    <td>{% if st.kind == 'yard' %}<span class="muted">{{ 'Leave' if loop.first else 'Return' }} {{ st.name }}</span>{% elif st.kind == 'pickup' %}<b>Load</b> at {{ st.name }}{% else %}<b>Offload</b> at {{ st.name }}{% endif %}</td>
+    <td class="muted">{% if st.kind != 'yard' %}{{ st.lane }}{% if st.account %} · {{ st.account[:24] }}{% endif %}{% if st.priority == 'must' %} <span class="pri-must">MUST</span>{% endif %}{% endif %}</td>
+    <td class="num">{{ '%.0f'|format(st.miles) if st.miles else '' }}</td>
+    <td class="num">{{ '%.0f'|format(st.bbl) if st.kind == 'dropoff' else '' }}</td>
+    <td class="num">{{ st.rev|money if st.kind == 'dropoff' else '' }}</td>
+    <td class="num muted">{{ st.rev_fsc|money if st.kind == 'dropoff' else '' }}</td>
+  </tr>
+  {% endfor %}
+  </table></div>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if plan.unassigned %}
+<h3 class="pri-must">Not fitted ({{ plan.unassigned|length }})</h3>
+<div class="wrap"><table>
+<tr><th>Priority</th><th>Lane</th><th>Account</th><th class="num">Revenue</th><th class="num">Profit before fuel</th></tr>
+{% for u in plan.unassigned %}
+<tr><td class="pri-{{ u.priority }}">{{ u.priority }}</td><td>{{ u.lane }}</td><td class="muted">{{ u.account }}</td><td class="num">{{ u.rev|money }}</td><td class="num">{{ u.profit|money }}</td></tr>
+{% endfor %}
+</table></div>
+<p class="muted">These didn't fit in the available driver hours (or weren't worth the fuel). Options: add a driver, extend a start window, move a load to another day, or mark it flexible and rebuild.</p>
+{% endif %}

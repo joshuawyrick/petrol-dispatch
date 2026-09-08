@@ -8,3 +8,4 @@ psycopg[binary]==3.2.3
 itsdangerous==2.2.0
 xlrd==2.0.1
 pandas==2.2.3
+ortools==9.15.6755

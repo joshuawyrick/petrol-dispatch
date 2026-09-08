@@ -84,6 +84,14 @@
 <p><button type="submit">Save driver availability</button> <span class="muted">Blank hours = the driver's normal limits. Enter lower numbers for a driver who is short on hours today.</span></p>
 </form>
 
-<h2>3. Build the plan</h2>
-<div class="card"><p class="muted">Coming in the next phase: the optimizer takes the loads and drivers above and builds each driver's shift.</p></div>
+<h2 id="plan">3. Build the plan</h2>
+<div class="card">
+  <form method="post" action="/day/{{ plan_date }}/plan" class="bar" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Building… ({{ st.solver_seconds|int }} s)';">
+    <button type="submit">{{ 'Rebuild plan' if plan else 'Build plan' }}</button>
+    <span class="muted">Takes about {{ st.solver_seconds|int }} seconds (Settings → Optimizer thinking time). Save any changes to loads and drivers above first.</span>
+    {% if plan_row %}<a class="btn secondary" href="/plan/{{ plan_row.id }}/print" target="_blank">Print view</a>
+    <span class="muted">Last built {{ plan.generated_at }} UTC</span>{% endif %}
+  </form>
+</div>
+{% if plan %}{% include "_plan.html" %}{% endif %}
 {% endblock %}

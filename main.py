@@ -11,15 +11,18 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
-from db import SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, init_db
+from db import SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, init_db
 from seed import seed
-import mileage, fsc
+import mileage, fsc, optimizer
+import json
 
 app = FastAPI(title="Petrol Dispatch Optimizer")
 PASSWORD = os.environ.get("DISPATCH_PASSWORD", "").strip()
 SECRET = os.environ.get("SESSION_SECRET") or hashlib.sha256(("petrol-" + PASSWORD).encode()).hexdigest()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+templates.env.filters["hm"] = optimizer.min_to_hm
+templates.env.filters["money"] = lambda v: f"${v:,.0f}"
 
 KINDS = ["pickup", "dropoff", "both", "yard"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -362,7 +365,9 @@ def _day_ctx(s: Session, plan_date: str):
     lanes_all = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).filter(Lane.active == True).all()
     lanes_all.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
     d0 = datetime.strptime(plan_date, "%Y-%m-%d").date()
-    return dict(plan_date=plan_date, weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
+    latest = s.query(Plan).filter(Plan.plan_date == plan_date).order_by(Plan.id.desc()).first()
+    plan = json.loads(latest.result_json) if latest else None
+    return dict(plan=plan, plan_row=latest, plan_date=plan_date, weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
                 avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"])
 
@@ -426,6 +431,24 @@ async def day_load_update(request: Request, plan_date: str, load_id: int, s: Ses
         l.notes = f.get("notes") or None
     s.commit()
     return RedirectResponse(f"/day/{plan_date}?msg=Updated", status_code=303)
+
+
+@app.post("/day/{plan_date}/plan")
+def day_plan(plan_date: str, s: Session = Depends(get_db)):
+    res = optimizer.solve(s, plan_date)
+    if not res.get("ok"):
+        return RedirectResponse(f"/day/{plan_date}?msg={res['error']}", status_code=303)
+    optimizer.save_plan(s, res)
+    t = res["totals"]
+    msg = f"Plan built: {t['loads']} loads on {t['drivers_used']} drivers, ${t['revenue']:,.0f} base revenue, ${t['per_hour']:,.0f}/hr"
+    if t["unassigned"]: msg += f" — {t['unassigned']} load(s) could not be fitted" + (f" ({t['unassigned_must']} MUST)" if t["unassigned_must"] else "")
+    return RedirectResponse(f"/day/{plan_date}?msg={msg}#plan", status_code=303)
+
+
+@app.get("/plan/{plan_id}/print", response_class=HTMLResponse)
+def plan_print(request: Request, plan_id: int, s: Session = Depends(get_db)):
+    row = s.get(Plan, plan_id)
+    return render(request, "plan_print.html", plan=json.loads(row.result_json), plan_row=row)
 
 
 if __name__ == "__main__":

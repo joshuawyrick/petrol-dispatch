@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Dispatch {{ plan.plan_date }}</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>body{background:#fff} main{max-width:none} .cards{grid-template-columns:repeat(4,1fr)} @media print{.noprint{display:none}}</style>
+</head><body><main>
+<h1>Dispatch plan — {{ plan.plan_date }} <span class="muted" style="font-size:13px">built {{ plan.generated_at }} UTC</span></h1>
+<p class="noprint"><button onclick="window.print()">Print</button> <a class="btn secondary" href="/day/{{ plan.plan_date }}">Back</a></p>
+{% include "_plan.html" %}
+</main></body></html>

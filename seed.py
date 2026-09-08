@@ -21,6 +21,10 @@ SETTINGS = [
     ("drive_buffer_hours", 0.5, "Drive-hours safety buffer", "hours", "Plan stays this far under the limit"),
     ("duty_buffer_hours", 0.5, "On-duty safety buffer", "hours", "Plan stays this far under the limit"),
     ("min_off_hours", 10, "Minimum off-duty between shifts", "hours", ""),
+    ("am_start_hour", 5, "Default AM shift earliest start", "hour (0-23)", "Used when a driver has no start time entered for the day"),
+    ("pm_start_hour", 17, "Default PM shift earliest start", "hour (0-23)", ""),
+    ("truck_handoff_minutes", 30, "Truck handoff time between drivers sharing a truck", "minutes", "Post-trip + pre-trip when a truck changes hands"),
+    ("solver_seconds", 20, "Optimizer thinking time", "seconds", "Longer = slightly better plans; 10-60"),
     ("reset_after_hours", 80, "On-duty hours before a 34-hour reset", "hours", ""),
     ("reset_hours", 34, "Full reset length", "hours", ""),
 ]
