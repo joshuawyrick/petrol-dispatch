@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ drv.name if drv else 'New driver' }}{% endblock %}
+{% block content %}
+<h1>{{ drv.name if drv else 'New driver' }}</h1>
+<form class="form" method="post" action="/drivers/save">
+  {% if drv %}<input type="hidden" name="id" value="{{ drv.id }}">{% endif %}
+  <div class="row"><label>Name</label><input type="text" name="name" required value="{{ drv.name if drv else '' }}"></div>
+  <div class="row"><label>Home yard</label><select name="yard_id">{% for y in yards %}<option value="{{ y.id }}" {% if drv and drv.yard_id == y.id %}selected{% endif %}>{{ y.name }}</option>{% endfor %}</select></div>
+  <div class="row"><label>Truck number</label><input type="text" name="truck" value="{{ drv.truck if drv and drv.truck else '' }}"></div>
+  <div class="hint">Give two drivers the same truck number if they share a truck. Leave blank for a single-man truck.</div>
+  <div class="row"><label>Usual shift</label><select name="usual_shift"><option value="">—</option><option value="AM" {% if drv and drv.usual_shift=='AM' %}selected{% endif %}>AM</option><option value="PM" {% if drv and drv.usual_shift=='PM' %}selected{% endif %}>PM</option></select></div>
+  <div class="row"><label>Max drive hours / shift</label><input type="number" step="0.5" name="max_drive_hours" value="{{ drv.max_drive_hours if drv and drv.max_drive_hours else '' }}" placeholder="{{ st.max_drive_hours }}"></div>
+  <div class="row"><label>Max on-duty hours / shift</label><input type="number" step="0.5" name="max_duty_hours" value="{{ drv.max_duty_hours if drv and drv.max_duty_hours else '' }}" placeholder="{{ st.max_duty_hours }}"></div>
+  <div class="hint">Blank = the defaults from Settings. Lower them for a driver you want to keep to shorter days.</div>
+  <div class="row"><label>Regular days off</label><span>{% for d in days %}<label style="margin-right:10px"><input type="checkbox" name="off_{{ d }}" value="1" {% if d in days_off %}checked{% endif %}> {{ d }}</label>{% endfor %}</span></div>
+  <div class="hint">Optional. Drivers without set days off just get marked unavailable on the Daily Plan page when they're resetting.</div>
+  <div class="row"><label>Active</label><input type="checkbox" name="active" value="1" {% if not drv or drv.active %}checked{% endif %}></div>
+  <div class="row"><label>Notes</label><textarea name="notes">{{ drv.notes if drv and drv.notes else '' }}</textarea></div>
+  <p><button type="submit">Save</button> <a class="btn secondary" href="/drivers">Back</a></p>
+</form>
+{% endblock %}

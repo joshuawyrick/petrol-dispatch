@@ -7,10 +7,10 @@
   <label><input type="checkbox" name="show_inactive" value="1" {% if show_inactive %}checked{% endif %}> show inactive</label>
   <button type="submit" class="secondary">Filter</button>
   <a class="btn" href="/lanes/new">+ Add lane</a>
-  <span class="muted">{{ rows|length }} shown · per-load values use each pickup's average barrels (150 minimum)</span>
+  <span class="muted">{{ rows|length }} shown · per-load values use each pickup's average barrels (150 minimum) · fuel surcharge now {{ '%.1f'|format(fsc_pct*100) }}%</span>
 </form>
 <div class="wrap"><table>
-<tr><th>Account</th><th>Pickup</th><th>Drop-off</th><th class="num">Rate $/bbl</th><th class="num">Driver $/bbl</th><th class="num">Avg bbl</th><th class="num">Revenue / load</th><th class="num">Driver pay / load</th><th class="num">Margin before fuel</th><th>Notes</th></tr>
+<tr><th>Account</th><th>Pickup</th><th>Drop-off</th><th class="num">Rate $/bbl</th><th class="num">Driver $/bbl</th><th class="num">Avg bbl</th><th class="num">Revenue / load</th><th class="num">with FSC</th><th class="num">Driver pay / load</th><th class="num">Margin before fuel</th><th>Notes</th></tr>
 {% for r in rows %}{% set l = r.l %}
 <tr {% if not l.active %}class="bad"{% elif not l.rate %}class="warn"{% endif %}>
   <td>{{ l.account or '' }}</td>
@@ -20,6 +20,7 @@
   <td class="num">{{ '$%.4f'|format(l.driver_pay) if l.driver_pay else '—' }}</td>
   <td class="num">{{ '%.1f'|format(r.bbl) }}</td>
   <td class="num">{{ '$%.0f'|format(r.rev) if l.rate else '' }}</td>
+  <td class="num muted">{{ '$%.0f'|format(r.rev_fsc) if l.rate else '' }}</td>
   <td class="num">{{ '$%.0f'|format(r.pay) if l.rate else '' }}</td>
   <td class="num">{{ '$%.0f'|format(r.margin) if l.rate else '' }}</td>
   <td class="muted">{{ l.notes or '' }}</td>

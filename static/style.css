@@ -39,3 +39,12 @@ button.small { padding:3px 8px; font-size:12px; }
 .inline { display:inline-flex; gap:6px; align-items:center; }
 .inline input[type=number] { width:80px; }
 .inline input[type=text] { min-width:140px; }
+header.top .spacer { flex:1; }
+header.top .logout { color:#cfd8e6; text-decoration:none; font-size:12px; }
+.login { max-width:360px; margin:80px auto; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:900px) { .grid2 { grid-template-columns:1fr; } }
+td input[type=number], td input[type=time], td select, td input[type=text] { padding:4px 6px; }
+td input.w60 { width:60px; } td input.w80 { width:80px; }
+.tot { font-weight:700; background:#eef1f5; }
+.pri-must { color:#b00020; font-weight:700; } .pri-flexible { color:var(--muted); }

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Log in{% endblock %}
+{% block content %}
+<div class="form login">
+  <h1>Petrol Dispatch</h1>
+  {% if no_pw %}
+    <p>No password is set yet, so the app is open. Add <code>DISPATCH_PASSWORD</code> under Environment in Render to lock it.</p>
+    <p><a class="btn" href="/">Continue</a></p>
+  {% else %}
+  <form method="post" action="/login">
+    <div class="row"><label>Password</label><input type="password" name="password" autofocus></div>
+    <p><button type="submit">Log in</button></p>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

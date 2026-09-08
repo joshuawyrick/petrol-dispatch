@@ -96,19 +96,66 @@ class Distance(Base):
 
 
 class Driver(Base):
-    """Placeholder for step 3 (drivers & hours). Created now so the table exists."""
+    """A driver: home yard, personal hour limits, regular days off, truck sharing."""
     __tablename__ = "drivers"
     id = Column(Integer, primary_key=True)
     name = Column(String(120), nullable=False)
     yard_id = Column(Integer, ForeignKey("locations.id"))
     active = Column(Boolean, default=True)
-    max_drive_hours = Column(Float, default=10)
-    max_duty_hours = Column(Float, default=16)
-    days_off = Column(String(60))                      # e.g. "Sat,Sun"
+    truck = Column(String(40))                         # truck number; two drivers with the same truck share it
+    max_drive_hours = Column(Float)                    # None = Settings default (10)
+    max_duty_hours = Column(Float)                     # None = Settings default (16)
+    days_off = Column(String(60))                      # "Sat,Sun" — regular days off, blank = none
+    usual_shift = Column(String(2))                    # "AM" | "PM" | blank
     notes = Column(Text)
     yard = relationship("Location", foreign_keys=[yard_id])
 
 
+class DriverDay(Base):
+    """A driver's availability for one plan date (entered by the dispatcher)."""
+    __tablename__ = "driver_days"
+    __table_args__ = (UniqueConstraint("plan_date", "driver_id", name="uq_driver_day"),)
+    id = Column(Integer, primary_key=True)
+    plan_date = Column(String(10), nullable=False)     # YYYY-MM-DD
+    driver_id = Column(Integer, ForeignKey("drivers.id"), nullable=False)
+    available = Column(Boolean, default=True)
+    shift = Column(String(2), default="AM")            # AM | PM
+    start_time = Column(String(5))                     # "05:00" earliest departure from yard
+    drive_hours_left = Column(Float)                   # None = driver default; lets dispatcher cap a tired driver
+    duty_hours_left = Column(Float)
+    cycle_hours_left = Column(Float)                   # hours left before the 80-hr / 34-hr reset kicks in
+    notes = Column(String(200))
+    driver = relationship("Driver")
+
+
+class LoadRequest(Base):
+    """A called-in load (or several on the same lane) that needs hauling."""
+    __tablename__ = "load_requests"
+    id = Column(Integer, primary_key=True)
+    plan_date = Column(String(10), nullable=False)     # the day it is planned for
+    lane_id = Column(Integer, ForeignKey("lanes.id"), nullable=False)
+    count = Column(Integer, default=1)                 # how many loads on this lane
+    must_go_by = Column(String(10))                    # YYYY-MM-DD deadline; blank = flexible
+    priority = Column(String(10), default="normal")    # must | normal | flexible
+    earliest_pickup = Column(String(5))                # optional time window for this load only
+    latest_pickup = Column(String(5))
+    bbl_override = Column(Float)                       # known barrels for this specific load
+    status = Column(String(12), default="open")        # open | planned | hauled | cancelled
+    notes = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    lane = relationship("Lane")
+
+
 def init_db():
+    """Create tables, then add any columns that newer versions of the app introduced (simple forward migration)."""
     os.makedirs("data", exist_ok=True)
     Base.metadata.create_all(engine)
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in have:
+                    ddl = f'ALTER TABLE {table.name} ADD COLUMN {col.name} {col.type.compile(engine.dialect)}'
+                    conn.execute(text(ddl))

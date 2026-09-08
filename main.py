@@ -1,21 +1,29 @@
-"""Petrol Dispatch Optimizer — web app (phase 1: master data, settings, mileage cache)."""
-import os
-from typing import Optional
-from fastapi import FastAPI, Request, Form, Depends
+"""Petrol Dispatch Optimizer — web app.
+
+Phase 1: master data, settings, mileage cache.   Phase 2: login, fuel surcharge + EIA price, drivers, daily load board.
+"""
+import os, hashlib
+from datetime import date, datetime, timedelta
+from fastapi import FastAPI, Request, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
-from db import SessionLocal, Setting, Location, Lane, Distance, init_db
+from db import SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, init_db
 from seed import seed
-import mileage
+import mileage, fsc
 
 app = FastAPI(title="Petrol Dispatch Optimizer")
+PASSWORD = os.environ.get("DISPATCH_PASSWORD", "").strip()
+SECRET = os.environ.get("SESSION_SECRET") or hashlib.sha256(("petrol-" + PASSWORD).encode()).hexdigest()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 KINDS = ["pickup", "dropoff", "both", "yard"]
+DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+PRIORITIES = ["must", "normal", "flexible"]
 
 
 @app.on_event("startup")
@@ -24,6 +32,39 @@ def _startup():
     print("seed:", seed())
 
 
+# ---------------- login ----------------
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if PASSWORD and not request.session.get("ok") and not (path.startswith("/login") or path.startswith("/static")):
+        return RedirectResponse("/login", status_code=303)
+    return await call_next(request)
+
+# added after the login check so it wraps it (Starlette runs the last-added middleware first)
+app.add_middleware(SessionMiddleware, secret_key=SECRET, max_age=14 * 24 * 3600, same_site="lax")
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request, "msg": request.query_params.get("msg"), "no_pw": not PASSWORD})
+
+
+@app.post("/login")
+async def login_post(request: Request):
+    f = await request.form()
+    if PASSWORD and f.get("password", "") == PASSWORD:
+        request.session["ok"] = True
+        return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/login?msg=Wrong+password", status_code=303)
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+# ---------------- helpers ----------------
 def get_db():
     s = SessionLocal()
     try:
@@ -36,38 +77,66 @@ def settings_dict(s: Session):
     return {x.key: x.value for x in s.query(Setting).all()}
 
 
+def money_ctx(s: Session):
+    """Numbers every money display needs: min bbl, FSC %, diesel price."""
+    st = settings_dict(s)
+    return dict(st=st, min_bbl=st.get("min_bbl") or 150, fsc=fsc.fsc_from_settings(st))
+
+
 def render(request, name, **ctx):
     ctx.setdefault("request", request)
     ctx.setdefault("msg", request.query_params.get("msg"))
+    ctx.setdefault("no_pw", not PASSWORD)
     return templates.TemplateResponse(name, ctx)
 
 
-def fnum(v):  # form field -> float or None
+def fnum(v):
     v = (v or "").strip().replace("$", "").replace(",", "")
     return float(v) if v else None
+
+
+def fint(v):
+    v = (v or "").strip()
+    return int(float(v)) if v else None
+
+
+def lane_money(l: Lane, min_bbl: float, fsc_pct: float, bbl=None):
+    bbl = bbl or l.pickup.billable_bbl(min_bbl)
+    rev = (l.rate or 0) * bbl
+    pay = (l.driver_pay or 0) * bbl
+    return dict(bbl=bbl, rev=rev, rev_fsc=rev * (1 + fsc_pct), pay=pay, margin=rev - pay, margin_fsc=rev * (1 + fsc_pct) - pay)
 
 
 # ---------------- Dashboard ----------------
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, s: Session = Depends(get_db)):
-    st = settings_dict(s)
+    eia_msg = fsc.refresh_diesel_price(s, os.environ.get("EIA_API_KEY"))     # no-op unless >24h since last check
+    m = money_ctx(s); st = m["st"]
     cov = mileage.coverage(s)
     todo = []
-    if not st.get("diesel_price"): todo.append("Enter the diesel price on the Settings page.")
+    if not PASSWORD: todo.append("No password set — add DISPATCH_PASSWORD under Environment in Render so only your dispatchers can open this.")
+    if not st.get("diesel_price"): todo.append("Diesel price is blank — click 'Refresh from EIA' on Settings or enter it by hand.")
     if not st.get("min_wage"): todo.append("Enter the California minimum wage on the Settings page.")
     no_rate = s.query(Lane).filter(Lane.active == True, Lane.rate == None).count()
     if no_rate: todo.append(f"{no_rate} active lane(s) have no rate — see Lanes.")
     if cov["missing"]: todo.append(f"{cov['missing']} of {cov['needed']} mileage pairs still need road miles — see Mileage.")
+    if not s.query(Driver).filter(Driver.active == True).count(): todo.append("No drivers yet — add them on the Drivers page.")
     counts = {k: s.query(Location).filter(Location.kind == k, Location.active == True).count() for k in KINDS}
+    today = date.today().isoformat()
+    open_loads = s.query(LoadRequest).filter(LoadRequest.plan_date == today, LoadRequest.status == "open").all()
     return render(request, "dashboard.html", counts=counts, lanes=s.query(Lane).filter(Lane.active == True).count(),
-                  cov=cov, todo=todo, has_key=bool(mileage.get_api_key()))
+                  drivers=s.query(Driver).filter(Driver.active == True).count(), cov=cov, todo=todo,
+                  has_key=bool(mileage.get_api_key()), st=st, fsc_pct=m["fsc"], eia_msg=eia_msg, today=today,
+                  open_loads=sum(l.count for l in open_loads))
 
 
 # ---------------- Settings ----------------
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, s: Session = Depends(get_db)):
-    rows = s.query(Setting).order_by(Setting.sort).all()
-    return render(request, "settings.html", rows=rows)
+    rows = [r for r in s.query(Setting).order_by(Setting.sort).all() if not r.key.startswith("eia_")]
+    info = {r.key: r.note for r in s.query(Setting).filter(Setting.key.like("eia_%")).all()}
+    m = money_ctx(s)
+    return render(request, "settings.html", rows=rows, info=info, fsc_pct=m["fsc"], has_eia_key=bool(os.environ.get("EIA_API_KEY")))
 
 
 @app.post("/settings")
@@ -80,17 +149,22 @@ async def settings_save(request: Request, s: Session = Depends(get_db)):
     return RedirectResponse("/settings?msg=Settings+saved", status_code=303)
 
 
+@app.post("/settings/eia")
+def settings_eia(s: Session = Depends(get_db)):
+    msg = fsc.refresh_diesel_price(s, os.environ.get("EIA_API_KEY"), force=True) or "Already up to date."
+    return RedirectResponse(f"/settings?msg={msg}", status_code=303)
+
+
 # ---------------- Locations ----------------
 @app.get("/locations", response_class=HTMLResponse)
 def locations(request: Request, kind: str = "", q: str = "", show_inactive: int = 0, s: Session = Depends(get_db)):
-    st = settings_dict(s)
+    m = money_ctx(s)
     qry = s.query(Location)
     if kind: qry = qry.filter(Location.kind == kind)
     if q: qry = qry.filter(Location.name.ilike(f"%{q}%"))
     if not show_inactive: qry = qry.filter(Location.active == True)
     rows = qry.order_by(Location.kind, Location.name).all()
-    return render(request, "locations.html", rows=rows, kind=kind, q=q, show_inactive=show_inactive,
-                  min_bbl=st.get("min_bbl") or 150, kinds=KINDS)
+    return render(request, "locations.html", rows=rows, kind=kind, q=q, show_inactive=show_inactive, min_bbl=m["min_bbl"], kinds=KINDS)
 
 
 @app.get("/locations/new", response_class=HTMLResponse)
@@ -115,10 +189,10 @@ async def location_save(request: Request, s: Session = Depends(get_db)):
     loc.lat = float(f["lat"]); loc.lon = float(f["lon"])
     loc.active = bool(f.get("active"))
     loc.avg_bbl_override = fnum(f.get("avg_bbl_override"))
-    loc.load_minutes = int(f["load_minutes"]) if f.get("load_minutes", "").strip() else None
+    loc.load_minutes = fint(f.get("load_minutes"))
     loc.open_time = f.get("open_time") or None
     loc.close_time = f.get("close_time") or None
-    loc.max_trucks_at_once = int(f["max_trucks_at_once"]) if f.get("max_trucks_at_once", "").strip() else None
+    loc.max_trucks_at_once = fint(f.get("max_trucks_at_once"))
     loc.notes = f.get("notes") or None
     s.add(loc); s.commit()
     return RedirectResponse(f"/locations/{loc.id}?msg=Saved", status_code=303)
@@ -127,8 +201,7 @@ async def location_save(request: Request, s: Session = Depends(get_db)):
 # ---------------- Lanes ----------------
 @app.get("/lanes", response_class=HTMLResponse)
 def lanes(request: Request, q: str = "", show_inactive: int = 0, s: Session = Depends(get_db)):
-    st = settings_dict(s)
-    min_bbl = st.get("min_bbl") or 150
+    m = money_ctx(s)
     qry = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff))
     if not show_inactive: qry = qry.filter(Lane.active == True)
     rows = qry.all()
@@ -136,13 +209,8 @@ def lanes(request: Request, q: str = "", show_inactive: int = 0, s: Session = De
         ql = q.lower()
         rows = [l for l in rows if ql in (l.pickup.name + " " + l.dropoff.name + " " + (l.account or "")).lower()]
     rows.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
-    view = []
-    for l in rows:
-        bbl = l.pickup.billable_bbl(min_bbl)
-        rev = (l.rate or 0) * bbl
-        pay = (l.driver_pay or 0) * bbl
-        view.append(dict(l=l, bbl=bbl, rev=rev, pay=pay, margin=rev - pay))
-    return render(request, "lanes.html", rows=view, q=q, show_inactive=show_inactive)
+    view = [dict(l=l, **lane_money(l, m["min_bbl"], m["fsc"])) for l in rows]
+    return render(request, "lanes.html", rows=view, q=q, show_inactive=show_inactive, fsc_pct=m["fsc"])
 
 
 def _lane_form(request, s, lane):
@@ -222,6 +290,142 @@ async def mileage_override(request: Request, s: Session = Depends(get_db)):
     d.override_note = f.get("override_note") or None
     s.commit()
     return RedirectResponse(f"/mileage?q={f.get('q','')}&msg=Override+saved", status_code=303)
+
+
+# ---------------- Drivers ----------------
+@app.get("/drivers", response_class=HTMLResponse)
+def drivers(request: Request, show_inactive: int = 0, s: Session = Depends(get_db)):
+    qry = s.query(Driver).options(joinedload(Driver.yard))
+    if not show_inactive: qry = qry.filter(Driver.active == True)
+    rows = sorted(qry.all(), key=lambda d: ((d.yard.name if d.yard else ""), d.name))
+    st = settings_dict(s)
+    return render(request, "drivers.html", rows=rows, show_inactive=show_inactive, st=st)
+
+
+def _driver_form(request, s, drv):
+    yards = s.query(Location).filter(Location.kind == "yard", Location.active == True).order_by(Location.name).all()
+    st = settings_dict(s)
+    return render(request, "driver_form.html", drv=drv, yards=yards, days=DAYS, st=st,
+                  days_off=set((drv.days_off or "").split(",")) if drv else set())
+
+
+@app.get("/drivers/new", response_class=HTMLResponse)
+def driver_new(request: Request, s: Session = Depends(get_db)):
+    return _driver_form(request, s, None)
+
+
+@app.get("/drivers/{drv_id}", response_class=HTMLResponse)
+def driver_edit(request: Request, drv_id: int, s: Session = Depends(get_db)):
+    return _driver_form(request, s, s.get(Driver, drv_id))
+
+
+@app.post("/drivers/save")
+async def driver_save(request: Request, s: Session = Depends(get_db)):
+    f = await request.form()
+    d = s.get(Driver, int(f["id"])) if f.get("id") else Driver()
+    d.name = f["name"].strip()
+    d.yard_id = fint(f.get("yard_id"))
+    d.active = bool(f.get("active"))
+    d.truck = (f.get("truck") or "").strip() or None
+    d.usual_shift = f.get("usual_shift") or None
+    d.max_drive_hours = fnum(f.get("max_drive_hours"))
+    d.max_duty_hours = fnum(f.get("max_duty_hours"))
+    d.days_off = ",".join(x for x in DAYS if f.get("off_" + x)) or None
+    d.notes = f.get("notes") or None
+    s.add(d); s.commit()
+    return RedirectResponse("/drivers?msg=Saved", status_code=303)
+
+
+# ---------------- Daily plan: drivers available + loads called in ----------------
+def _day_ctx(s: Session, plan_date: str):
+    m = money_ctx(s)
+    drivers = s.query(Driver).options(joinedload(Driver.yard)).filter(Driver.active == True).all()
+    drivers.sort(key=lambda d: ((d.yard.name if d.yard else ""), d.name))
+    dd = {x.driver_id: x for x in s.query(DriverDay).filter(DriverDay.plan_date == plan_date).all()}
+    weekday = DAYS[datetime.strptime(plan_date, "%Y-%m-%d").weekday()]
+    drv_rows = []
+    for d in drivers:
+        x = dd.get(d.id)
+        off_today = weekday in (d.days_off or "").split(",")
+        drv_rows.append(dict(d=d, x=x, available=(x.available if x else not off_today), shift=(x.shift if x else (d.usual_shift or "AM")),
+                             off_today=off_today))
+    loads = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup),
+                                         joinedload(LoadRequest.lane).joinedload(Lane.dropoff)) \
+        .filter(LoadRequest.plan_date == plan_date, LoadRequest.status != "cancelled").all()
+    loads.sort(key=lambda l: (PRIORITIES.index(l.priority or "normal"), l.lane.pickup.name))
+    load_rows = []
+    tot = dict(count=0, rev=0.0, rev_fsc=0.0, pay=0.0)
+    for l in loads:
+        mm = lane_money(l.lane, m["min_bbl"], m["fsc"], bbl=l.bbl_override)
+        load_rows.append(dict(l=l, **mm))
+        tot["count"] += l.count; tot["rev"] += mm["rev"] * l.count; tot["rev_fsc"] += mm["rev_fsc"] * l.count; tot["pay"] += mm["pay"] * l.count
+    lanes_all = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).filter(Lane.active == True).all()
+    lanes_all.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
+    d0 = datetime.strptime(plan_date, "%Y-%m-%d").date()
+    return dict(plan_date=plan_date, weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
+                prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
+                avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"])
+
+
+@app.get("/day", response_class=HTMLResponse)
+def day_redirect():
+    return RedirectResponse(f"/day/{date.today().isoformat()}", status_code=303)
+
+
+@app.get("/day/{plan_date}", response_class=HTMLResponse)
+def day_page(request: Request, plan_date: str, s: Session = Depends(get_db)):
+    return render(request, "day.html", **_day_ctx(s, plan_date))
+
+
+@app.post("/day/{plan_date}/drivers")
+async def day_drivers_save(request: Request, plan_date: str, s: Session = Depends(get_db)):
+    f = await request.form()
+    existing = {x.driver_id: x for x in s.query(DriverDay).filter(DriverDay.plan_date == plan_date).all()}
+    for d in s.query(Driver).filter(Driver.active == True).all():
+        x = existing.get(d.id) or DriverDay(plan_date=plan_date, driver_id=d.id)
+        x.available = bool(f.get(f"avail_{d.id}"))
+        x.shift = f.get(f"shift_{d.id}") or "AM"
+        x.start_time = f.get(f"start_{d.id}") or None
+        x.drive_hours_left = fnum(f.get(f"drive_{d.id}"))
+        x.duty_hours_left = fnum(f.get(f"duty_{d.id}"))
+        x.cycle_hours_left = fnum(f.get(f"cycle_{d.id}"))
+        x.notes = f.get(f"dnote_{d.id}") or None
+        s.add(x)
+    s.commit()
+    return RedirectResponse(f"/day/{plan_date}?msg=Driver+availability+saved", status_code=303)
+
+
+@app.post("/day/{plan_date}/loads/add")
+async def day_load_add(request: Request, plan_date: str, s: Session = Depends(get_db)):
+    f = await request.form()
+    l = LoadRequest(plan_date=plan_date, lane_id=int(f["lane_id"]), count=fint(f.get("count")) or 1,
+                    priority=f.get("priority") or "normal", must_go_by=f.get("must_go_by") or None,
+                    earliest_pickup=f.get("earliest_pickup") or None, latest_pickup=f.get("latest_pickup") or None,
+                    bbl_override=fnum(f.get("bbl_override")), notes=f.get("notes") or None)
+    s.add(l); s.commit()
+    return RedirectResponse(f"/day/{plan_date}?msg=Load+added", status_code=303)
+
+
+@app.post("/day/{plan_date}/loads/{load_id}")
+async def day_load_update(request: Request, plan_date: str, load_id: int, s: Session = Depends(get_db)):
+    f = await request.form()
+    l = s.get(LoadRequest, load_id)
+    action = f.get("action")
+    if action == "delete":
+        s.delete(l)
+    elif action == "move":
+        l.plan_date = f.get("new_date") or l.plan_date
+    else:
+        l.count = fint(f.get("count")) or 1
+        l.priority = f.get("priority") or "normal"
+        l.must_go_by = f.get("must_go_by") or None
+        l.earliest_pickup = f.get("earliest_pickup") or None
+        l.latest_pickup = f.get("latest_pickup") or None
+        l.bbl_override = fnum(f.get("bbl_override"))
+        l.status = f.get("status") or l.status
+        l.notes = f.get("notes") or None
+    s.commit()
+    return RedirectResponse(f"/day/{plan_date}?msg=Updated", status_code=303)
 
 
 if __name__ == "__main__":

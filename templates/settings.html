@@ -3,6 +3,12 @@
 {% block content %}
 <h1>Settings</h1>
 <p class="muted">Every number the planner assumes. Change a value and click Save.</p>
+<div class="card" style="margin-bottom:14px">
+  <b>Fuel surcharge right now: {{ '%.1f'|format(fsc_pct*100) }}%</b> of freight, from the diesel price below and the surcharge rule (base price, step, % per step).
+  {% if info.eia_price_week %}<span class="muted">EIA week ending {{ info.eia_price_week }}; last checked {{ info.eia_last_check }} UTC.</span>{% endif %}
+  <form method="post" action="/settings/eia" style="display:inline; margin-left:10px"><button type="submit" class="secondary small">Refresh diesel price from EIA now</button></form>
+  <div class="muted" style="margin-top:6px">The app re-checks EIA automatically once a day. {% if not has_eia_key %}Using EIA's public spreadsheet; an optional <code>EIA_API_KEY</code> makes it more reliable.{% endif %}</div>
+</div>
 <form method="post" action="/settings">
 <div class="wrap"><table>
 <tr><th>Setting</th><th>Value</th><th>Unit</th><th>Note</th></tr>

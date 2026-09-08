@@ -7,9 +7,13 @@
   <div class="card"><div class="n">{{ counts.dropoff + counts.both }}</div><div class="l">Drop-off locations</div></div>
   <div class="card"><div class="n">{{ counts.yard }}</div><div class="l">Yards</div></div>
   <div class="card"><div class="n">{{ lanes }}</div><div class="l">Active lanes</div></div>
+  <div class="card"><div class="n">{{ drivers }}</div><div class="l">Active drivers</div></div>
+  <div class="card"><div class="n">{{ '%.1f'|format(fsc_pct*100) }}%</div><div class="l">Fuel surcharge (diesel ${{ '%.3f'|format(st.diesel_price or 0) }})</div></div>
+  <div class="card"><div class="n">{{ open_loads }}</div><div class="l"><a href="/day/{{ today }}">Open loads today</a></div></div>
   <div class="card"><div class="n">{{ cov.have }} / {{ cov.needed }}</div><div class="l">Mileage pairs with road miles</div></div>
 </div>
 
+{% if eia_msg %}<div class="flash">{{ eia_msg }}</div>{% endif %}
 {% if todo %}
 <h2>Needs attention</h2>
 <div class="todo"><ul>{% for t in todo %}<li>{{ t }}</li>{% endfor %}</ul></div>
@@ -20,6 +24,6 @@
 <h2>Status</h2>
 <div class="card">
   <p>Google Maps key: {% if has_key %}<b>found</b> (GOOGLE_MAPS_API_KEY is set){% else %}<b>not set</b> — add it under Secrets, then restart the app{% endif %}.</p>
-  <p class="muted">Phase 1 of the build: master data, settings and mileage. Drivers, the daily load board and the optimizer come in the next phases.</p>
+  <p class="muted">Phase 2: login, fuel surcharge, drivers and the daily load board are in. The optimizer (auto-building each driver's shift) is the next phase.</p>
 </div>
 {% endblock %}
