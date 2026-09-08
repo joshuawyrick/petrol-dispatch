@@ -5,7 +5,7 @@
 <form class="bar" method="get" action="/locations">
   <input type="text" name="q" placeholder="Search name…" value="{{ q }}">
   <select name="kind"><option value="">All types</option>{% for k in kinds %}<option value="{{ k }}" {% if k == kind %}selected{% endif %}>{{ k }}</option>{% endfor %}</select>
-  <label><input type="checkbox" name="show_inactive" value="1" {% if show_inactive %}checked{% endif %}> show inactive</label>
+  <label><input type="checkbox" name="show_inactive" value="1" {% if show_inactive %}checked{% endif %} onchange="this.form.submit()"> show inactive{% if inactive_count is defined and inactive_count %} ({{ inactive_count }}){% endif %}</label>
   <button type="submit" class="secondary">Filter</button>
   <a class="btn" href="/locations/new">+ Add location</a>
   <span class="muted">{{ rows|length }} shown</span>

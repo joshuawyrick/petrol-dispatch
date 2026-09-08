@@ -3,8 +3,7 @@
 {% block content %}
 <h1>Drivers</h1>
 <form class="bar" method="get" action="/drivers">
-  <label><input type="checkbox" name="show_inactive" value="1" {% if show_inactive %}checked{% endif %}> show inactive</label>
-  <button type="submit" class="secondary">Filter</button>
+  <label><input type="checkbox" name="show_inactive" value="1" {% if show_inactive %}checked{% endif %} onchange="this.form.submit()"> show inactive{% if inactive_count is defined and inactive_count %} ({{ inactive_count }}){% endif %}</label>
   <a class="btn" href="/drivers/new">+ Add driver</a>
   </form>
   <form class="bar" method="post" action="/drivers/samsara" style="display:inline">

@@ -167,7 +167,8 @@ def locations(request: Request, kind: str = "", q: str = "", show_inactive: int 
     if q: qry = qry.filter(Location.name.ilike(f"%{q}%"))
     if not show_inactive: qry = qry.filter(Location.active == True)
     rows = qry.order_by(Location.kind, Location.name).all()
-    return render(request, "locations.html", rows=rows, kind=kind, q=q, show_inactive=show_inactive, min_bbl=m["min_bbl"], kinds=KINDS)
+    return render(request, "locations.html", rows=rows, kind=kind, q=q, show_inactive=show_inactive, min_bbl=m["min_bbl"], kinds=KINDS,
+                  inactive_count=s.query(Location).filter(Location.active == False).count())
 
 
 @app.get("/locations/new", response_class=HTMLResponse)
@@ -213,7 +214,8 @@ def lanes(request: Request, q: str = "", show_inactive: int = 0, s: Session = De
         rows = [l for l in rows if ql in (l.pickup.name + " " + l.dropoff.name + " " + (l.account or "")).lower()]
     rows.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
     view = [dict(l=l, **lane_money(l, m["min_bbl"], m["fsc"])) for l in rows]
-    return render(request, "lanes.html", rows=view, q=q, show_inactive=show_inactive, fsc_pct=m["fsc"])
+    return render(request, "lanes.html", rows=view, q=q, show_inactive=show_inactive, fsc_pct=m["fsc"],
+                  inactive_count=s.query(Lane).filter(Lane.active == False).count())
 
 
 def _lane_form(request, s, lane):
@@ -379,7 +381,8 @@ def drivers(request: Request, show_inactive: int = 0, s: Session = Depends(get_d
     if not show_inactive: qry = qry.filter(Driver.active == True)
     rows = sorted(qry.all(), key=lambda d: ((d.yard.name if d.yard else ""), d.name))
     st = settings_dict(s)
-    return render(request, "drivers.html", rows=rows, show_inactive=show_inactive, st=st, has_samsara=bool(samsara.token()))
+    return render(request, "drivers.html", rows=rows, show_inactive=show_inactive, st=st, has_samsara=bool(samsara.token()),
+                  inactive_count=s.query(Driver).filter(Driver.active == False).count())
 
 
 @app.post("/drivers/{drv_id}/toggle")

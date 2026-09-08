@@ -4,7 +4,7 @@
 <h1>Lanes</h1>
 <form class="bar" method="get" action="/lanes">
   <input type="text" name="q" placeholder="Search pickup, drop-off or account…" value="{{ q }}">
-  <label><input type="checkbox" name="show_inactive" value="1" {% if show_inactive %}checked{% endif %}> show inactive</label>
+  <label><input type="checkbox" name="show_inactive" value="1" {% if show_inactive %}checked{% endif %} onchange="this.form.submit()"> show inactive{% if inactive_count is defined and inactive_count %} ({{ inactive_count }}){% endif %}</label>
   <button type="submit" class="secondary">Filter</button>
   <a class="btn" href="/lanes/new">+ Add lane</a>
   <span class="muted">{{ rows|length }} shown · per-load values use each pickup's average barrels (150 minimum) · fuel surcharge now {{ '%.1f'|format(fsc_pct*100) }}%</span>
