@@ -11,14 +11,15 @@
   <span class="muted">Fuel surcharge {{ '%.1f'|format(fsc_pct*100) }}% · target ${{ '%.0f'|format(st.target_per_hour or 135) }}/hr (base, before FSC)</span>
 </div>
 
-<h2>1. Loads called in for this day — {{ tot.count }} load(s)</h2>
+<h2>1. Loads for this day — {{ tot.count }} load(s)</h2>
+{% if standing_added %}<div class="flash">{{ standing_added }} standing order(s) added to this day automatically. Adjust counts or delete any that don't apply today.</div>{% endif %}
 <div class="wrap"><table>
-<tr><th>Priority</th><th>Pickup</th><th>Drop-off</th><th>Account</th><th class="num">#</th><th>Must go by</th><th>Pickup window</th><th class="num">bbl</th><th class="num">Revenue (base)</th><th class="num">with FSC</th><th>Status</th><th>Notes</th><th></th></tr>
+<tr><th>Priority</th><th>Pickup</th><th>Drop-off</th><th>Account</th><th class="num">#</th><th>Must go by</th><th>Pickup window</th><th class="num">bbl<br><span class="muted" style="font-weight:400;text-transform:none">blank = avg</span></th><th class="num">Revenue (base)</th><th class="num">with FSC</th><th>Status</th><th>Notes</th><th></th></tr>
 {% for r in load_rows %}{% set l = r.l %}
 <tr>
 <form method="post" action="/day/{{ plan_date }}/loads/{{ l.id }}">
   <td><select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if l.priority == p %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></td>
-  <td class="{{ 'pri-' + (l.priority or 'normal') }}">{{ l.lane.pickup.name }}</td>
+  <td class="{{ 'pri-' + (l.priority or 'normal') }}">{{ l.lane.pickup.name }}{% if l.standing_order_id %} <span class="pill" title="from a standing order">daily</span>{% endif %}</td>
   <td>{{ l.lane.dropoff.name }}</td>
   <td class="muted">{{ l.lane.account or '' }}</td>
   <td class="num"><input type="number" name="count" class="w60" min="1" value="{{ l.count }}"></td>
@@ -58,7 +59,7 @@
   <input type="text" name="notes" placeholder="notes (tank #, PO, etc.)" style="min-width:160px">
   <button type="submit">Add</button>
 </form>
-<div class="muted">Priority: <b>must</b> = has to move today; <b>normal</b> = today if it fits; <b>flexible</b> = can slide to a later day. Leave bbl blank to use the pickup's average.</div>
+<div class="muted">Priority: <b>must</b> = has to move today; <b>normal</b> = today if it fits; <b>flexible</b> = can slide to a later day. Barrels come from the pickup's average automatically — only fill bbl if you know this load is different. Lanes that run every day belong under <a href="/standing">Standing Orders</a>.</div>
 </div>
 
 <h2>2. Drivers available — {{ avail }} of {{ drv_rows|length }}</h2>

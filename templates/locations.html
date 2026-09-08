@@ -11,7 +11,7 @@
   <span class="muted">{{ rows|length }} shown</span>
 </form>
 <div class="wrap"><table>
-<tr><th>Name</th><th>Type</th><th class="num">Lat</th><th class="num">Lon</th><th class="num">Loads (hist.)</th><th class="num">Avg bbl (pricing)</th><th>Hours</th><th>Notes</th></tr>
+<tr><th>Name</th><th>Type</th><th class="num">Lat</th><th class="num">Lon</th><th class="num">Loads (hist.)</th><th class="num">Avg bbl per load</th><th>Hours</th><th>Notes</th></tr>
 {% for r in rows %}
 <tr {% if not r.active %}class="bad"{% endif %}>
   <td><a href="/locations/{{ r.id }}">{{ r.name }}</a>{% if not r.active %} <span class="pill">inactive</span>{% endif %}</td>

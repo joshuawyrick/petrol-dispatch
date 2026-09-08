@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Standing Orders{% endblock %}
+{% block content %}
+<h1>Standing orders</h1>
+<p class="muted">Loads that repeat every day (or on set days) — e.g. Lost Hills #2 → AFS N Midway, 12 loads a day. They are added to each day's load list automatically the first time that day is opened on the Daily Plan page; the dispatcher can then change the count or delete them for that day only.</p>
+
+<div class="wrap"><table>
+<tr><th>Lane</th><th>Account</th><th class="num">Loads / day</th><th>Days</th><th>Priority</th><th>Pickup window</th><th>From – until</th><th>Notes</th><th></th></tr>
+{% for o in rows %}
+<tr {% if not o.active %}class="bad"{% endif %}>
+<form method="post" action="/standing/save">
+  <input type="hidden" name="id" value="{{ o.id }}"><input type="hidden" name="lane_id" value="{{ o.lane_id }}">
+  <td>{{ o.lane.pickup.name }} → {{ o.lane.dropoff.name }}</td>
+  <td class="muted">{{ o.lane.account or '' }}</td>
+  <td class="num"><input type="number" name="count" class="w60" min="1" value="{{ o.count }}"></td>
+  <td style="white-space:nowrap">{% for d in days %}<label style="margin-right:4px"><input type="checkbox" name="d_{{ d }}" value="1" {% if d in (o.days or '').split(',') %}checked{% endif %}>{{ d[:2] }}</label>{% endfor %}</td>
+  <td><select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if o.priority == p %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></td>
+  <td><input type="time" name="earliest_pickup" value="{{ o.earliest_pickup or '' }}"> – <input type="time" name="latest_pickup" value="{{ o.latest_pickup or '' }}"></td>
+  <td><input type="date" name="start_date" value="{{ o.start_date or '' }}"> – <input type="date" name="end_date" value="{{ o.end_date or '' }}"></td>
+  <td><input type="text" name="notes" value="{{ o.notes or '' }}" style="min-width:120px"></td>
+  <td style="white-space:nowrap"><label><input type="checkbox" name="active" value="1" {% if o.active %}checked{% endif %}> active</label>
+      <button type="submit" class="small">Save</button></form>
+      <form method="post" action="/standing/{{ o.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this standing order? Loads already added to past days stay.')"><button type="submit" class="small secondary">✕</button></form></td>
+</tr>
+{% endfor %}
+{% if not rows %}<tr><td colspan="9" class="muted">No standing orders yet.</td></tr>{% endif %}
+</table></div>
+
+<div class="card" style="margin-top:12px">
+<form method="post" action="/standing/save" class="bar">
+  <b>Add:</b>
+  <select name="lane_id" required style="max-width:420px"><option value="">— choose lane —</option>{% for ln in lanes_all %}<option value="{{ ln.id }}">{{ ln.pickup.name }} → {{ ln.dropoff.name }}{% if ln.account %} ({{ ln.account[:22] }}){% endif %}</option>{% endfor %}</select>
+  <label>loads/day <input type="number" name="count" class="w60" min="1" value="1"></label>
+  <span style="white-space:nowrap">{% for d in days %}<label style="margin-right:4px"><input type="checkbox" name="d_{{ d }}" value="1" checked>{{ d[:2] }}</label>{% endfor %}</span>
+  <select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if p=='normal' %}selected{% endif %}>{{ p }}</option>{% endfor %}</select>
+  <label>window <input type="time" name="earliest_pickup"> – <input type="time" name="latest_pickup"></label>
+  <label>from <input type="date" name="start_date"></label> <label>until <input type="date" name="end_date"></label>
+  <input type="text" name="notes" placeholder="notes (PO #, tank…)" style="min-width:140px">
+  <input type="hidden" name="active" value="1">
+  <button type="submit">Add standing order</button>
+</form>
+</div>
+{% endblock %}

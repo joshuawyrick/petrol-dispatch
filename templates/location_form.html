@@ -10,7 +10,7 @@
   <div class="row"><label>Longitude</label><input type="number" step="any" name="lon" required value="{{ loc.lon if loc else '' }}"></div>
   <div class="row"><label>Active</label><input type="checkbox" name="active" value="1" {% if not loc or loc.active %}checked{% endif %}></div>
   <div class="row"><label>Avg bbl from history</label><span>{{ '%.1f'|format(loc.avg_bbl_history) if loc and loc.avg_bbl_history else 'none' }} <span class="muted">({{ loc.loads_history if loc else 0 }} loads)</span></span></div>
-  <div class="row"><label>Pin avg bbl (optional)</label><input type="number" step="any" name="avg_bbl_override" value="{{ loc.avg_bbl_override if loc and loc.avg_bbl_override else '' }}"></div>
+  <div class="row"><label>Override avg bbl (optional)</label><input type="number" step="any" name="avg_bbl_override" value="{{ loc.avg_bbl_override if loc and loc.avg_bbl_override else '' }}"></div>
   <div class="hint">Leave blank to use history (never below the minimum in Settings). Enter a number to force a value for pricing.</div>
   <div class="row"><label>Load / offload minutes</label><input type="number" name="load_minutes" value="{{ loc.load_minutes if loc and loc.load_minutes else '' }}"></div>
   <div class="hint">Blank = the default from Settings (60). Set if this site is consistently faster or slower.</div>

@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
-from db import SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, init_db
+from db import SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, StandingOrder, init_db
 from seed import seed
 import mileage, fsc, optimizer, samsara
 import json
@@ -354,11 +354,33 @@ async def driver_save(request: Request, s: Session = Depends(get_db)):
     d.days_off = ",".join(x for x in DAYS if f.get("off_" + x)) or None
     d.notes = f.get("notes") or None
     s.add(d); s.commit()
-    return RedirectResponse("/drivers?msg=Saved", status_code=303)
+    s.refresh(d)
+    yard = s.get(Location, d.yard_id).name if d.yard_id else "NO YARD"
+    print(f"driver saved: id={d.id} name={d.name} yard={yard} shift={d.usual_shift} truck={d.truck} days_off={d.days_off} active={d.active}")
+    return RedirectResponse(f"/drivers?msg=Saved+{d.name}:+yard+{yard},+shift+{d.usual_shift or '-'},+truck+{d.truck or '-'},+days+off+{d.days_off or 'none'}", status_code=303)
 
 
 # ---------------- Daily plan: drivers available + loads called in ----------------
+def apply_standing_orders(s: Session, plan_date: str) -> int:
+    """Create this day's loads from active standing orders (once per order per day). Returns how many were added."""
+    weekday = DAYS[datetime.strptime(plan_date, "%Y-%m-%d").weekday()]
+    done = {l.standing_order_id for l in s.query(LoadRequest).filter(LoadRequest.plan_date == plan_date,
+                                                                      LoadRequest.standing_order_id != None).all()}
+    n = 0
+    for so in s.query(StandingOrder).filter(StandingOrder.active == True).all():
+        if so.id in done or weekday not in (so.days or "").split(","): continue
+        if so.start_date and plan_date < so.start_date: continue
+        if so.end_date and plan_date > so.end_date: continue
+        s.add(LoadRequest(plan_date=plan_date, lane_id=so.lane_id, count=so.count or 1, priority=so.priority or "normal",
+                          earliest_pickup=so.earliest_pickup, latest_pickup=so.latest_pickup, standing_order_id=so.id,
+                          notes=so.notes))
+        n += 1
+    if n: s.commit()
+    return n
+
+
 def _day_ctx(s: Session, plan_date: str):
+    added = apply_standing_orders(s, plan_date)
     m = money_ctx(s)
     drivers = s.query(Driver).options(joinedload(Driver.yard)).filter(Driver.active == True).all()
     drivers.sort(key=lambda d: ((d.yard.name if d.yard else ""), d.name))
@@ -385,10 +407,42 @@ def _day_ctx(s: Session, plan_date: str):
     d0 = datetime.strptime(plan_date, "%Y-%m-%d").date()
     latest = s.query(Plan).filter(Plan.plan_date == plan_date).order_by(Plan.id.desc()).first()
     plan = json.loads(latest.result_json) if latest else None
-    return dict(plan=plan, plan_row=latest, plan_date=plan_date, weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
+    return dict(plan=plan, plan_row=latest, plan_date=plan_date, standing_added=added, weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
                 avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"],
                 has_samsara=bool(samsara.token()))
+
+
+# ---------------- Standing orders (recurring daily loads) ----------------
+@app.get("/standing", response_class=HTMLResponse)
+def standing(request: Request, s: Session = Depends(get_db)):
+    rows = s.query(StandingOrder).options(joinedload(StandingOrder.lane).joinedload(Lane.pickup),
+                                          joinedload(StandingOrder.lane).joinedload(Lane.dropoff)).all()
+    rows.sort(key=lambda o: (not o.active, o.lane.pickup.name, o.lane.dropoff.name))
+    lanes_all = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).filter(Lane.active == True).all()
+    lanes_all.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
+    return render(request, "standing.html", rows=rows, lanes_all=lanes_all, days=DAYS, priorities=PRIORITIES)
+
+
+@app.post("/standing/save")
+async def standing_save(request: Request, s: Session = Depends(get_db)):
+    f = await request.form()
+    o = s.get(StandingOrder, int(f["id"])) if f.get("id") else StandingOrder()
+    o.lane_id = int(f["lane_id"]); o.count = fint(f.get("count")) or 1
+    o.days = ",".join(x for x in DAYS if f.get("d_" + x)) or None
+    o.priority = f.get("priority") or "normal"
+    o.earliest_pickup = f.get("earliest_pickup") or None; o.latest_pickup = f.get("latest_pickup") or None
+    o.start_date = f.get("start_date") or None; o.end_date = f.get("end_date") or None
+    o.active = bool(f.get("active")); o.notes = f.get("notes") or None
+    s.add(o); s.commit()
+    return RedirectResponse("/standing?msg=Standing+order+saved.+It+will+appear+on+each+matching+day+the+first+time+that+day+is+opened.", status_code=303)
+
+
+@app.post("/standing/{so_id}/delete")
+def standing_delete(so_id: int, s: Session = Depends(get_db)):
+    o = s.get(StandingOrder, so_id)
+    if o: s.delete(o); s.commit()
+    return RedirectResponse("/standing?msg=Deleted", status_code=303)
 
 
 @app.get("/day", response_class=HTMLResponse)

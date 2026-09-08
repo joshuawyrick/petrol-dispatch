@@ -145,8 +145,26 @@ class LoadRequest(Base):
     latest_pickup = Column(String(5))
     bbl_override = Column(Float)                       # known barrels for this specific load
     status = Column(String(12), default="open")        # open | planned | hauled | cancelled
+    standing_order_id = Column(Integer, ForeignKey("standing_orders.id"))   # set when auto-created from a standing order
     notes = Column(String(200))
     created_at = Column(DateTime, default=datetime.utcnow)
+    lane = relationship("Lane")
+
+
+class StandingOrder(Base):
+    """A recurring load: e.g. Lost Hills -> AFS N Midway, 12 loads every day; Mt Poso -> Olympus 4/day Mon-Sat."""
+    __tablename__ = "standing_orders"
+    id = Column(Integer, primary_key=True)
+    lane_id = Column(Integer, ForeignKey("lanes.id"), nullable=False)
+    count = Column(Integer, default=1)                 # loads per day
+    days = Column(String(30), default="Mon,Tue,Wed,Thu,Fri,Sat,Sun")
+    priority = Column(String(10), default="normal")
+    earliest_pickup = Column(String(5))
+    latest_pickup = Column(String(5))
+    start_date = Column(String(10))                    # blank = already running
+    end_date = Column(String(10))                      # blank = until switched off
+    active = Column(Boolean, default=True)
+    notes = Column(String(200))
     lane = relationship("Lane")
 
 
