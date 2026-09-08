@@ -6,6 +6,7 @@
   <div class="card"><div class="n">{{ cov.needed }}</div><div class="l">Location pairs the planner can use</div></div>
   <div class="card"><div class="n">{{ cov.have }}</div><div class="l">With road miles (Google or override)</div></div>
   <div class="card"><div class="n">{{ cov.missing }}</div><div class="l">Still missing</div></div>
+  <div class="card"><div class="n">{{ approved_count }}</div><div class="l">Legs with an approved route</div></div>
 </div>
 <div class="card">
   <p>Road miles are looked up <b>once</b> per pair and stored. New locations or lanes only add the pairs that are new.
@@ -22,19 +23,20 @@
 <h2>Look up or override a pair</h2>
 <form class="bar" method="get" action="/mileage">
   <input type="text" name="q" placeholder="Search origin or destination name…" value="{{ q }}">
-  <select name="only"><option value="">all pairs</option><option value="override" {% if only=='override' %}selected{% endif %}>overrides only</option><option value="straight" {% if only=='straight' %}selected{% endif %}>straight-line estimates only</option></select>
+  <select name="only"><option value="">all pairs</option><option value="approved" {% if only=='approved' %}selected{% endif %}>approved routes only</option><option value="override" {% if only=='override' %}selected{% endif %}>overrides only</option><option value="straight" {% if only=='straight' %}selected{% endif %}>straight-line estimates only</option></select>
   <button type="submit" class="secondary">Search</button>
-  <span class="muted">Enter your approved-route miles in the Override column for pairs where the map route is not usable for a loaded hazmat truck.</span>
+  <span class="muted">Click <b>route</b> on any pair to see it on a map, drag it onto the roads you want, and approve it — the engine uses the approved miles from then on.{% if not has_browser_key %} (Map needs <code>GOOGLE_MAPS_BROWSER_KEY</code>; typing miles works meanwhile.){% endif %}</span>
 </form>
 {% if rows %}
 <div class="wrap"><table>
-<tr><th>From</th><th>To</th><th class="num">Google miles</th><th class="num">Google min</th><th>Source</th><th>Override (miles / minutes / note)</th><th class="num">Used miles</th></tr>
+<tr><th>From</th><th>To</th><th class="num">Google miles</th><th class="num">Google min</th><th>Source</th><th>Route</th><th>Override (miles / minutes / note)</th><th class="num">Used miles</th></tr>
 {% for d in rows %}
 <tr>
   <td>{{ d.origin.name }}</td><td>{{ d.dest.name }}</td>
   <td class="num">{{ '%.1f'|format(d.google_miles) if d.google_miles else '' }}</td>
   <td class="num">{{ '%.0f'|format(d.google_minutes) if d.google_minutes else '' }}</td>
   <td><span class="pill">{{ d.source or '' }}</span></td>
+  <td><a class="pill {{ 'approved' if d.approved else 'review' }}" href="/route/{{ d.origin_id }}/{{ d.dest_id }}">{{ 'approved' if d.approved else 'route' }}</a></td>
   <td><form class="inline" method="post" action="/mileage/override">
       <input type="hidden" name="id" value="{{ d.id }}"><input type="hidden" name="q" value="{{ q }}">
       <input type="number" step="0.1" name="override_miles" placeholder="miles" value="{{ d.override_miles if d.override_miles else '' }}">

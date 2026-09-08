@@ -87,6 +87,11 @@ class Distance(Base):
     override_note = Column(String(200))
     source = Column(String(30))                        # google | manual | straight-line
     fetched_at = Column(DateTime)
+    approved = Column(Boolean, default=False)          # a dispatcher reviewed this leg and approved a route
+    approved_at = Column(DateTime)
+    route_kind = Column(String(20))                    # google-default | custom (dragged) | manual-miles
+    via_json = Column(Text)                            # JSON list of [lat, lng] via points from dragging
+    polyline = Column(Text)                            # encoded overview polyline of the approved route
     origin = relationship("Location", foreign_keys=[origin_id])
     dest = relationship("Location", foreign_keys=[dest_id])
 

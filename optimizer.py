@@ -240,7 +240,7 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
         stops, prev_node, loaded_mi, empty_mi, drive_m = [], mgr.IndexToNode(idx), 0.0, 0.0, 0
         t_start = sol.Value(time_dim.CumulVar(idx))
         rev = pay = 0.0; n_loads = 0
-        stops.append(dict(kind="yard", name=drv["yard"].name, arrive=t_start, depart=t_start, miles=0))
+        stops.append(dict(kind="yard", name=drv["yard"].name, loc_id=drv["yard"].id, arrive=t_start, depart=t_start, miles=0))
         idx = sol.Value(routing.NextVar(idx))
         while not routing.IsEnd(idx):
             node = mgr.IndexToNode(idx); nd = nodes[node]
@@ -251,7 +251,7 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
             arrive = sol.Value(time_dim.CumulVar(idx))
             svc = node_service(node)
             L = nd["load"]
-            stop = dict(kind=nd["kind"], name=nd["loc"].name, arrive=arrive, depart=arrive + svc, miles=mi, drive_min=dm,
+            stop = dict(kind=nd["kind"], name=nd["loc"].name, loc_id=nd["loc"].id, arrive=arrive, depart=arrive + svc, miles=mi, drive_min=dm,
                         load_id=L["req"].id, unit=L["unit"], lane=f'{L["lane"].pickup.name} → {L["lane"].dropoff.name}',
                         account=L["lane"].account or "", bbl=L["bbl"], priority=L["priority"])
             if nd["kind"] == "dropoff":
@@ -264,7 +264,7 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
         mi = miles_mat[prev_node][end_node]; dm = drive_mat[prev_node][end_node]
         empty_mi += mi; drive_m += dm
         t_end = sol.Value(time_dim.CumulVar(idx))
-        stops.append(dict(kind="yard", name=drv["yard"].name, arrive=t_end, depart=t_end, miles=mi, drive_min=dm))
+        stops.append(dict(kind="yard", name=drv["yard"].name, loc_id=drv["yard"].id, arrive=t_end, depart=t_end, miles=mi, drive_min=dm))
         duty_m = t_end - t_start
         fuel = (loaded_mi + empty_mi) / inp.mpg * inp.diesel
         used = n_loads > 0

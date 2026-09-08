@@ -80,3 +80,16 @@ input.w70 { width:70px !important; min-width:0; }
 .small-link { font-size:12px; }
 select.pri-must { color:#b00020; font-weight:700; }
 table.loads td, table.drivers td { vertical-align:middle; }
+/* ---- route approval ---- */
+.pill.approved { background:#dff3e4; color:#1a7f37; text-decoration:none; } .pill.review { background:#fff1c2; color:#8a6100; text-decoration:none; }
+a.pill:hover { filter:brightness(.95); }
+.route-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; margin-bottom:12px; }
+.route-status { text-align:right; }
+.route-grid { display:grid; grid-template-columns:1fr 360px; gap:14px; }
+@media (max-width:1000px) { .route-grid { grid-template-columns:1fr; } }
+.route-map { min-height:560px; height:70vh; background:#e9edf3; border:1px solid var(--line); border-radius:8px; }
+.route-panel .card { margin-bottom:12px; }
+.route-big { font-size:26px; font-weight:700; margin:4px 0; }
+.chk { display:block; margin:8px 0; }
+details.card summary { cursor:pointer; color:var(--accent); }
+.small { font-size:12px; }

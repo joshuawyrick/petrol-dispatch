@@ -256,6 +256,7 @@ def mileage_page(request: Request, q: str = "", only: str = "", s: Session = Dep
     if q or only:
         qry = s.query(Distance).options(joinedload(Distance.origin), joinedload(Distance.dest))
         if only == "override": qry = qry.filter(Distance.override_miles != None)
+        if only == "approved": qry = qry.filter(Distance.approved == True)
         if only == "straight": qry = qry.filter(Distance.source == "straight-line")
         rows = qry.all()
         if q:
@@ -264,7 +265,8 @@ def mileage_page(request: Request, q: str = "", only: str = "", s: Session = Dep
         rows.sort(key=lambda d: (d.origin.name, d.dest.name))
         rows = rows[:400]
     return render(request, "mileage.html", cov=cov, rows=rows, q=q, only=only, speed=st.get("avg_speed_mph") or 41,
-                  has_key=bool(mileage.get_api_key()))
+                  has_key=bool(mileage.get_api_key()), approved_count=s.query(Distance).filter(Distance.approved == True).count(),
+                  has_browser_key=bool(os.environ.get("GOOGLE_MAPS_BROWSER_KEY", "").strip()))
 
 
 @app.post("/mileage/fetch")
@@ -293,6 +295,81 @@ async def mileage_override(request: Request, s: Session = Depends(get_db)):
     d.override_note = f.get("override_note") or None
     s.commit()
     return RedirectResponse(f"/mileage?q={f.get('q','')}&msg=Override+saved", status_code=303)
+
+
+# ---------------- Route approval (per leg) ----------------
+def _dist_row(s: Session, a: int, b: int, create=True):
+    d = s.query(Distance).filter_by(origin_id=a, dest_id=b).first()
+    if not d and create:
+        d = Distance(origin_id=a, dest_id=b); s.add(d); s.flush()
+    return d
+
+
+@app.get("/route/{a}/{b}", response_class=HTMLResponse)
+def route_page(request: Request, a: int, b: int, back: str = "", s: Session = Depends(get_db)):
+    o, d = s.get(Location, a), s.get(Location, b)
+    if not o or not d:
+        return RedirectResponse("/mileage?msg=Unknown+location", status_code=303)
+    dist = _dist_row(s, a, b, create=False)
+    st = settings_dict(s)
+    via = dist.via_json if dist and dist.via_json else "[]"
+    return render(request, "route.html", o=o, d=d, dist=dist, via_json=via, back=back,
+                  browser_key=os.environ.get("GOOGLE_MAPS_BROWSER_KEY", "").strip(), speed=st.get("avg_speed_mph") or 41)
+
+
+def _back_url(back: str, msg: str) -> str:
+    """Append ?msg= to a return URL, keeping any #fragment at the end where browsers expect it."""
+    base, frag = (back.split("#", 1) + [""])[:2]
+    url = f"{base}{'&' if '?' in base else '?'}msg={msg}"
+    return url + ("#" + frag if frag else "")
+
+
+def _approve(s, a, b, miles, minutes, kind, via, poly, note):
+    d = _dist_row(s, a, b)
+    d.override_miles = miles; d.override_minutes = minutes
+    d.approved = True; d.approved_at = datetime.utcnow(); d.route_kind = kind
+    d.via_json = via or None; d.polyline = poly or None
+    if note is not None: d.override_note = note or None
+    if d.google_miles is None: d.google_miles, d.source = miles, "google"
+
+
+@app.post("/route/{a}/{b}/approve")
+async def route_approve(request: Request, a: int, b: int, s: Session = Depends(get_db)):
+    f = await request.form()
+    miles, mins = fnum(f.get("miles")), fnum(f.get("minutes"))
+    if not miles:
+        return RedirectResponse(f"/route/{a}/{b}?msg=No+route+to+approve+yet", status_code=303)
+    _approve(s, a, b, miles, mins, f.get("kind") or "google-default", f.get("via"), f.get("polyline"), f.get("note"))
+    msg = f"Approved: {miles} mi"
+    if f.get("reverse") and fnum(f.get("rev_miles")):
+        _approve(s, b, a, fnum(f.get("rev_miles")), fnum(f.get("rev_minutes")), f.get("kind") or "google-default",
+                 f.get("rev_via"), f.get("rev_polyline"), f.get("note"))
+        msg += f" (reverse {fnum(f.get('rev_miles'))} mi)"
+    s.commit()
+    return RedirectResponse(_back_url(f.get("back") or f"/route/{a}/{b}", msg), status_code=303)
+
+
+@app.post("/route/{a}/{b}/manual")
+async def route_manual(request: Request, a: int, b: int, s: Session = Depends(get_db)):
+    f = await request.form()
+    miles = fnum(f.get("miles"))
+    if not miles:
+        return RedirectResponse(f"/route/{a}/{b}?msg=Enter+the+miles+first", status_code=303)
+    _approve(s, a, b, miles, fnum(f.get("minutes")), "manual-miles", None, None, None)
+    if f.get("reverse"): _approve(s, b, a, miles, fnum(f.get("minutes")), "manual-miles", None, None, None)
+    s.commit()
+    return RedirectResponse(_back_url(f.get("back") or f"/route/{a}/{b}", f"Approved+{miles}+mi+(typed)"), status_code=303)
+
+
+@app.post("/route/{a}/{b}/unapprove")
+async def route_unapprove(request: Request, a: int, b: int, s: Session = Depends(get_db)):
+    f = await request.form()
+    d = _dist_row(s, a, b, create=False)
+    if d:
+        d.approved = False; d.approved_at = None; d.route_kind = None; d.via_json = None; d.polyline = None
+        d.override_miles = None; d.override_minutes = None
+        s.commit()
+    return RedirectResponse(_back_url(f.get("back") or f"/route/{a}/{b}", "Approval+cleared"), status_code=303)
 
 
 # ---------------- Drivers ----------------
@@ -379,6 +456,25 @@ def apply_standing_orders(s: Session, plan_date: str) -> int:
     return n
 
 
+def annotate_legs(s: Session, plan: dict):
+    """Mark every leg of every shift with its route-approval status (and count unreviewed legs)."""
+    approved = {(d.origin_id, d.dest_id): d for d in s.query(Distance).filter(Distance.approved == True).all()}
+    unreviewed, seen = 0, set()
+    for sh in plan.get("shifts", []):
+        prev = None
+        for st in sh.get("stops", []):
+            lid = st.get("loc_id")
+            if prev is not None and lid is not None and prev != lid:
+                d = approved.get((prev, lid))
+                st["leg_from"] = prev
+                st["leg_ok"] = bool(d)
+                st["leg_kind"] = d.route_kind if d else None
+                if not d and (prev, lid) not in seen:
+                    unreviewed += 1; seen.add((prev, lid))
+            prev = lid
+    plan["unreviewed_legs"] = unreviewed
+
+
 def _day_ctx(s: Session, plan_date: str):
     added = apply_standing_orders(s, plan_date)
     m = money_ctx(s)
@@ -407,6 +503,7 @@ def _day_ctx(s: Session, plan_date: str):
     d0 = datetime.strptime(plan_date, "%Y-%m-%d").date()
     latest = s.query(Plan).filter(Plan.plan_date == plan_date).order_by(Plan.id.desc()).first()
     plan = json.loads(latest.result_json) if latest else None
+    if plan: annotate_legs(s, plan)
     return dict(plan=plan, plan_row=latest, plan_date=plan_date, standing_added=added,
                 today=date.today().isoformat(), tomorrow=(date.today() + timedelta(days=1)).isoformat(),
                 weekday_long=d0.strftime("%A"), pretty_date=d0.strftime("%B %-d, %Y"), short_date=d0.strftime("%b %-d"), weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
@@ -523,7 +620,8 @@ def day_plan(plan_date: str, s: Session = Depends(get_db)):
 @app.get("/plan/{plan_id}/print", response_class=HTMLResponse)
 def plan_print(request: Request, plan_id: int, s: Session = Depends(get_db)):
     row = s.get(Plan, plan_id)
-    return render(request, "plan_print.html", plan=json.loads(row.result_json), plan_row=row)
+    plan = json.loads(row.result_json); annotate_legs(s, plan)
+    return render(request, "plan_print.html", plan=plan, plan_row=row)
 
 
 if __name__ == "__main__":

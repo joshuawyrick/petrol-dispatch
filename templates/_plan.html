@@ -10,6 +10,9 @@
   <div class="card"><div class="n">{{ '%.1f'|format(T.hours) }} h</div><div class="l">Total shift hours · {{ '%.0f'|format(T.miles) }} miles</div></div>
 </div>
 
+{% if plan.unreviewed_legs %}
+<div class="todo" style="margin:10px 0"><b>{{ plan.unreviewed_legs }} leg{{ 's' if plan.unreviewed_legs != 1 }}</b> in this plan {{ 'have' if plan.unreviewed_legs != 1 else 'has' }} not had their route approved yet (yellow "review" tags below). Approve them, then Rebuild so the plan uses the approved miles.</div>
+{% endif %}
 {% for sh in plan.shifts %}
 <div class="shift {% if not sh.used %}unused{% endif %}">
   <div class="shift-head">
@@ -21,13 +24,14 @@
   </div>
   {% if sh.used %}
   <div class="wrap"><table class="stops">
-  <tr><th>Time</th><th>Stop</th><th>Lane / account</th><th class="num">Miles</th><th class="num">bbl</th><th class="num">Revenue</th><th class="num">with FSC</th></tr>
+  <tr><th>Time</th><th>Stop</th><th>Lane / account</th><th class="num">Miles</th><th>Route</th><th class="num">bbl</th><th class="num">Revenue</th><th class="num">with FSC</th></tr>
   {% for st in sh.stops %}
   <tr class="stop-{{ st.kind }}">
     <td>{{ st.arrive|hm }}{% if st.kind != 'yard' %} – {{ st.depart|hm }}{% endif %}</td>
     <td>{% if st.kind == 'yard' %}<span class="muted">{{ 'Leave' if loop.first else 'Return' }} {{ st.name }}</span>{% elif st.kind == 'pickup' %}<b>Load</b> at {{ st.name }}{% else %}<b>Offload</b> at {{ st.name }}{% endif %}</td>
     <td class="muted">{% if st.kind != 'yard' %}{{ st.lane }}{% if st.account %} · {{ st.account[:24] }}{% endif %}{% if st.priority == 'must' %} <span class="pri-must">MUST</span>{% endif %}{% endif %}</td>
     <td class="num">{{ '%.0f'|format(st.miles) if st.miles else '' }}</td>
+    <td>{% if st.leg_from is defined %}<a class="pill {{ 'approved' if st.leg_ok else 'review' }}" href="/route/{{ st.leg_from }}/{{ st.loc_id }}?back={{ ('/day/' ~ plan.plan_date ~ '%23plan')|urlencode }}" title="{{ 'Approved route — click to view or change' if st.leg_ok else 'Route not reviewed yet — click to approve' }}">{{ 'approved' if st.leg_ok else 'review' }}</a>{% endif %}</td>
     <td class="num">{{ '%.0f'|format(st.bbl) if st.kind == 'dropoff' else '' }}</td>
     <td class="num">{{ st.rev|money if st.kind == 'dropoff' else '' }}</td>
     <td class="num muted">{{ st.rev_fsc|money if st.kind == 'dropoff' else '' }}</td>

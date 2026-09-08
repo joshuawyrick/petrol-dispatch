@@ -5,5 +5,6 @@
 </head><body><main>
 <h1>Dispatch plan — {{ plan.plan_date }} <span class="muted" style="font-size:13px">built {{ plan.generated_at }} UTC</span></h1>
 <p class="noprint"><button onclick="window.print()">Print</button> <a class="btn secondary" href="/day/{{ plan.plan_date }}">Back</a></p>
+<p class="muted" style="font-size:12px">Route selection remains the driver's responsibility under company hazmat routing rules. "approved" legs follow a dispatcher-approved route; "review" legs use map mileage that has not been checked.</p>
 {% include "_plan.html" %}
 </main></body></html>
