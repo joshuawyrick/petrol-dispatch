@@ -1,103 +1,125 @@
 {% extends "base.html" %}
 {% block title %}Daily Plan {{ plan_date }}{% endblock %}
 {% block content %}
-<div class="bar">
-  <a class="btn secondary" href="/day/{{ prev }}">‹ {{ prev }}</a>
-  <h1 style="margin:0">{{ weekday }} {{ plan_date }}</h1>
-  <a class="btn secondary" href="/day/{{ next }}">{{ next }} ›</a>
-  <form method="get" action="/day" onsubmit="location.href='/day/'+this.d.value; return false;" class="inline">
-    <input type="date" name="d" value="{{ plan_date }}"><button type="submit" class="secondary small">Go</button>
-  </form>
-  <span class="muted">Fuel surcharge {{ '%.1f'|format(fsc_pct*100) }}% · target ${{ '%.0f'|format(st.target_per_hour or 135) }}/hr (base, before FSC)</span>
+{% set is_today = plan_date == today %}{% set is_tomorrow = plan_date == tomorrow %}{% set is_past = plan_date < today %}
+<div class="daybar {% if is_past %}past{% endif %}">
+  <div class="daybar-main">
+    <div class="daybar-label">Planning loads and drivers for</div>
+    <div class="daybar-date">{{ weekday_long }}, {{ pretty_date }}
+      {% if is_today %}<span class="pill today">TODAY</span>{% elif is_tomorrow %}<span class="pill tomorrow">TOMORROW</span>{% elif is_past %}<span class="pill">PAST DAY</span>{% endif %}
+    </div>
+  </div>
+  <div class="daybar-nav">
+    <a class="btn secondary" href="/day/{{ prev }}">‹ Previous day</a>
+    <a class="btn secondary" href="/day/{{ today }}">Today</a>
+    <a class="btn secondary" href="/day/{{ tomorrow }}">Tomorrow</a>
+    <a class="btn secondary" href="/day/{{ next }}">Next day ›</a>
+    <form method="get" action="/day" onsubmit="location.href='/day/'+this.d.value; return false;" class="inline">
+      <input type="date" name="d" value="{{ plan_date }}"><button type="submit" class="secondary small">Go</button>
+    </form>
+  </div>
+  <div class="daybar-facts muted">Fuel surcharge {{ '%.1f'|format(fsc_pct*100) }}% · target ${{ '%.0f'|format(st.target_per_hour or 135) }}/hr base · {{ tot.count }} load{{ 's' if tot.count != 1 }} · {{ avail }} of {{ drv_rows|length }} drivers in{% if plan %} · plan built {{ plan.generated_at[11:16] }} UTC{% endif %}</div>
 </div>
 
-<h2>1. Loads for this day — {{ tot.count }} load(s)</h2>
-{% if standing_added %}<div class="flash">{{ standing_added }} standing order(s) added to this day automatically. Adjust counts or delete any that don't apply today.</div>{% endif %}
-<div class="wrap"><table>
-<tr><th>Priority</th><th>Pickup</th><th>Drop-off</th><th>Account</th><th class="num">#</th><th>Must go by</th><th>Pickup window</th><th class="num">bbl<br><span class="muted" style="font-weight:400;text-transform:none">blank = avg</span></th><th class="num">Revenue (base)</th><th class="num">with FSC</th><th>Status</th><th>Notes</th><th></th></tr>
+{# ================= 1. LOADS ================= #}
+<section class="panel">
+<div class="panel-head">
+  <h2>Step 1 · Loads to haul on {{ weekday }} {{ short_date }} <span class="count">{{ tot.count }}</span></h2>
+  <label class="toggle"><input type="checkbox" onchange="document.body.classList.toggle('show-load-detail', this.checked)"> show details (deadline, window, status, notes)</label>
+</div>
+{% if standing_added %}<div class="flash">{{ standing_added }} standing order(s) were added to this day automatically. Change a count or delete a line if today is different.</div>{% endif %}
+<div class="wrap"><table class="loads">
+<tr>
+  <th>Priority</th><th>Lane</th><th class="num">Loads</th><th class="num">bbl / load</th><th class="num">Revenue</th><th class="num muted">with FSC</th>
+  <th class="detail">Must go by</th><th class="detail">Pickup window</th><th class="detail">Status</th><th class="detail">Notes</th><th></th>
+</tr>
 {% for r in load_rows %}{% set l = r.l %}
 <tr>
 <form method="post" action="/day/{{ plan_date }}/loads/{{ l.id }}">
-  <td><select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if l.priority == p %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></td>
-  <td class="{{ 'pri-' + (l.priority or 'normal') }}">{{ l.lane.pickup.name }}{% if l.standing_order_id %} <span class="pill" title="from a standing order">daily</span>{% endif %}</td>
-  <td>{{ l.lane.dropoff.name }}</td>
-  <td class="muted">{{ l.lane.account or '' }}</td>
+  <td><select name="priority" class="pri-{{ l.priority or 'normal' }}">{% for p in priorities %}<option value="{{ p }}" {% if l.priority == p %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></td>
+  <td><b>{{ l.lane.pickup.name }}</b> → {{ l.lane.dropoff.name }}{% if l.standing_order_id %} <span class="pill" title="from a standing order">daily</span>{% endif %}<br><span class="muted">{{ l.lane.account or '' }}</span></td>
   <td class="num"><input type="number" name="count" class="w60" min="1" value="{{ l.count }}"></td>
-  <td><input type="date" name="must_go_by" value="{{ l.must_go_by or '' }}"></td>
-  <td><input type="time" name="earliest_pickup" value="{{ l.earliest_pickup or '' }}"> – <input type="time" name="latest_pickup" value="{{ l.latest_pickup or '' }}"></td>
-  <td class="num"><input type="number" step="1" name="bbl_override" class="w60" value="{{ l.bbl_override if l.bbl_override else '' }}" placeholder="{{ '%.0f'|format(r.bbl) }}"></td>
-  <td class="num">${{ '%.0f'|format(r.rev * l.count) }}</td>
-  <td class="num muted">${{ '%.0f'|format(r.rev_fsc * l.count) }}</td>
-  <td><select name="status">{% for st_ in ['open','planned','hauled','cancelled'] %}<option value="{{ st_ }}" {% if l.status == st_ %}selected{% endif %}>{{ st_ }}</option>{% endfor %}</select></td>
-  <td><input type="text" name="notes" style="min-width:120px" value="{{ l.notes or '' }}"></td>
+  <td class="num"><input type="number" step="1" name="bbl_override" class="w70" value="{{ l.bbl_override if l.bbl_override else '' }}" placeholder="{{ '%.0f'|format(r.bbl) }}" title="blank = pickup average"></td>
+  <td class="num">${{ '{:,.0f}'.format(r.rev * l.count) }}</td>
+  <td class="num muted">${{ '{:,.0f}'.format(r.rev_fsc * l.count) }}</td>
+  <td class="detail"><input type="date" name="must_go_by" value="{{ l.must_go_by or '' }}"></td>
+  <td class="detail" style="white-space:nowrap"><input type="time" name="earliest_pickup" value="{{ l.earliest_pickup or '' }}"> – <input type="time" name="latest_pickup" value="{{ l.latest_pickup or '' }}"></td>
+  <td class="detail"><select name="status">{% for st_ in ['open','planned','hauled','cancelled'] %}<option value="{{ st_ }}" {% if l.status == st_ %}selected{% endif %}>{{ st_ }}</option>{% endfor %}</select></td>
+  <td class="detail"><input type="text" name="notes" style="min-width:140px" value="{{ l.notes or '' }}"></td>
   <td style="white-space:nowrap"><button type="submit" class="small" name="action" value="save">Save</button>
-      <button type="submit" class="small secondary" name="action" value="move" onclick="this.form.new_date.value=prompt('Move to date (YYYY-MM-DD):','{{ next }}')||''; return !!this.form.new_date.value;">Move</button>
+      <button type="submit" class="small secondary" name="action" value="move" onclick="this.form.new_date.value=prompt('Move these loads to which date? (YYYY-MM-DD)','{{ next }}')||''; return !!this.form.new_date.value;">Move</button>
       <input type="hidden" name="new_date" value="">
-      <button type="submit" class="small secondary" name="action" value="delete" onclick="return confirm('Delete this load?')">✕</button></td>
+      <button type="submit" class="small secondary" name="action" value="delete" onclick="return confirm('Remove these loads from this day?')">✕</button></td>
 </form>
 </tr>
 {% endfor %}
 {% if load_rows %}
-<tr class="tot"><td colspan="4">Total</td><td class="num">{{ tot.count }}</td><td colspan="3"></td><td class="num">${{ '%.0f'|format(tot.rev) }}</td><td class="num">${{ '%.0f'|format(tot.rev_fsc) }}</td><td colspan="3" class="muted">driver pay ${{ '%.0f'|format(tot.pay) }}</td></tr>
+<tr class="tot"><td colspan="2">Total for the day</td><td class="num">{{ tot.count }}</td><td></td><td class="num">${{ '{:,.0f}'.format(tot.rev) }}</td><td class="num muted">${{ '{:,.0f}'.format(tot.rev_fsc) }}</td><td colspan="5" class="muted">driver pay ${{ '{:,.0f}'.format(tot.pay) }}</td></tr>
 {% else %}
-<tr><td colspan="13" class="muted">No loads entered for this day yet.</td></tr>
+<tr><td colspan="11" class="muted">No loads on this day yet. Add them below, or set up <a href="/standing">standing orders</a> for lanes that run every day.</td></tr>
 {% endif %}
 </table></div>
 
-<div class="card" style="margin-top:10px">
-<form method="post" action="/day/{{ plan_date }}/loads/add" class="bar">
-  <b>Add loads:</b>
-  <select name="lane_id" required style="max-width:420px">
-    <option value="">— choose lane (pickup → drop-off) —</option>
-    {% for ln in lanes_all %}<option value="{{ ln.id }}">{{ ln.pickup.name }} → {{ ln.dropoff.name }}{% if ln.account %} ({{ ln.account[:22] }}){% endif %}</option>{% endfor %}
-  </select>
-  <label># <input type="number" name="count" class="w60" min="1" value="1"></label>
-  <select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if p=='normal' %}selected{% endif %}>{{ p }}</option>{% endfor %}</select>
-  <label>must go by <input type="date" name="must_go_by"></label>
-  <label>window <input type="time" name="earliest_pickup"> – <input type="time" name="latest_pickup"></label>
-  <label>bbl <input type="number" name="bbl_override" class="w60" placeholder="avg"></label>
-  <input type="text" name="notes" placeholder="notes (tank #, PO, etc.)" style="min-width:160px">
-  <button type="submit">Add</button>
+<form method="post" action="/day/{{ plan_date }}/loads/add" class="addbar">
+  <div class="addbar-row">
+    <b>Add loads to {{ weekday }} {{ short_date }}:</b>
+    <select name="lane_id" required style="min-width:340px"><option value="">— choose lane (pickup → drop-off) —</option>{% for ln in lanes_all %}<option value="{{ ln.id }}">{{ ln.pickup.name }} → {{ ln.dropoff.name }}{% if ln.account %} ({{ ln.account[:22] }}){% endif %}</option>{% endfor %}</select>
+    <label>how many <input type="number" name="count" class="w60" min="1" value="1"></label>
+    <select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if p=='normal' %}selected{% endif %}>{{ p }}</option>{% endfor %}</select>
+    <button type="submit">Add</button>
+    <a href="#" class="muted small-link" onclick="document.getElementById('addmore').hidden=!document.getElementById('addmore').hidden; return false;">more options…</a>
+  </div>
+  <div id="addmore" class="addbar-row muted" hidden>
+    <label>must go by <input type="date" name="must_go_by"></label>
+    <label>pickup window <input type="time" name="earliest_pickup"> – <input type="time" name="latest_pickup"></label>
+    <label>bbl <input type="number" name="bbl_override" class="w70" placeholder="avg"></label>
+    <input type="text" name="notes" placeholder="notes (tank #, PO…)" style="min-width:160px">
+  </div>
+  <div class="muted hint-line">Barrels and rate come from the pickup location and the lane automatically. <b>must</b> = has to move this day · <b>normal</b> = this day if it fits · <b>flexible</b> = can slide.</div>
 </form>
-<div class="muted">Priority: <b>must</b> = has to move today; <b>normal</b> = today if it fits; <b>flexible</b> = can slide to a later day. Barrels come from the pickup's average automatically — only fill bbl if you know this load is different. Lanes that run every day belong under <a href="/standing">Standing Orders</a>.</div>
-</div>
+</section>
 
-<h2>2. Drivers available — {{ avail }} of {{ drv_rows|length }}</h2>
-<form method="post" action="/day/{{ plan_date }}/samsara" class="bar">
-  <button type="submit" class="secondary small" {% if not has_samsara %}disabled title="Add SAMSARA_API_TOKEN under Environment in Render"{% endif %}>Pull hours from Samsara</button>
-  <span class="muted">Fills the hours-left columns from each driver's live ELD clocks (for a future date, cycle hours only — drive/shift reset after the 10-hour break).</span>
-</form>
+{# ================= 2. DRIVERS ================= #}
+<section class="panel">
+<div class="panel-head">
+  <h2>Step 2 · Drivers working {{ weekday }} {{ short_date }} <span class="count">{{ avail }} of {{ drv_rows|length }}</span></h2>
+  <label class="toggle"><input type="checkbox" onchange="document.body.classList.toggle('show-drv-detail', this.checked)"> show hours detail (drive / on-duty left, notes)</label>
+</div>
+<div class="bar">
+  <form method="post" action="/day/{{ plan_date }}/samsara" style="display:inline"><button type="submit" class="secondary small" {% if not has_samsara %}disabled title="Add SAMSARA_API_TOKEN under Environment in Render"{% endif %}>Pull hours from Samsara</button></form>
+  <span class="muted">Untick anyone not working this day. Blank hours = the driver's normal limits.{% if not is_today %} For a future day only cycle hours come from Samsara (drive/shift reset after the 10-hour break).{% endif %}</span>
+</div>
 <form method="post" action="/day/{{ plan_date }}/drivers">
-<div class="wrap"><table>
-<tr><th>Available</th><th>Driver</th><th>Yard</th><th>Truck</th><th>Shift</th><th>Earliest start</th><th class="num">Drive hrs left</th><th class="num">On-duty hrs left</th><th class="num">Cycle hrs left (of {{ st.reset_after_hours|int }})</th><th>Samsara</th><th>Note</th></tr>
+<div class="wrap"><table class="drivers">
+<tr><th>In</th><th>Driver</th><th>Shift</th><th>Earliest start</th><th class="num">Cycle hrs left<br><span class="muted th-sub">of {{ st.reset_after_hours|int }}</span></th>
+    <th class="num detail">Drive hrs left</th><th class="num detail">On-duty hrs left</th><th>Samsara</th><th class="detail">Note</th></tr>
 {% for r in drv_rows %}{% set d = r.d %}{% set x = r.x %}
 <tr {% if not r.available %}class="bad"{% endif %}>
-  <td><input type="checkbox" name="avail_{{ d.id }}" value="1" {% if r.available %}checked{% endif %}>{% if r.off_today %} <span class="pill">day off</span>{% endif %}</td>
-  <td>{{ d.name }}</td>
-  <td class="muted">{{ d.yard.name if d.yard else '' }}</td>
-  <td class="muted">{{ d.truck or '' }}</td>
+  <td><input type="checkbox" name="avail_{{ d.id }}" value="1" {% if r.available %}checked{% endif %}>{% if r.off_today %} <span class="pill" title="regular day off">off</span>{% endif %}</td>
+  <td><b>{{ d.name }}</b><br><span class="muted">{{ d.yard.name if d.yard else 'NO YARD — set it on the Drivers page' }}{% if d.truck %} · truck {{ d.truck }}{% endif %}</span></td>
   <td><select name="shift_{{ d.id }}"><option value="AM" {% if r.shift=='AM' %}selected{% endif %}>AM</option><option value="PM" {% if r.shift=='PM' %}selected{% endif %}>PM</option></select></td>
   <td><input type="time" name="start_{{ d.id }}" value="{{ x.start_time if x and x.start_time else '' }}"></td>
-  <td class="num"><input type="number" step="0.5" class="w60" name="drive_{{ d.id }}" value="{{ x.drive_hours_left if x and x.drive_hours_left else '' }}" placeholder="{{ d.max_drive_hours or st.max_drive_hours }}"></td>
-  <td class="num"><input type="number" step="0.5" class="w60" name="duty_{{ d.id }}" value="{{ x.duty_hours_left if x and x.duty_hours_left else '' }}" placeholder="{{ d.max_duty_hours or st.max_duty_hours }}"></td>
-  <td class="num"><input type="number" step="0.5" class="w60" name="cycle_{{ d.id }}" value="{{ x.cycle_hours_left if x and x.cycle_hours_left else '' }}" placeholder="{{ st.reset_after_hours|int }}"></td>
-  <td class="muted">{% if x and x.hos_synced_at %}{{ x.hos_status or '' }} · {{ x.hos_synced_at.strftime('%m/%d %H:%M') }}Z{% endif %}</td>
-  <td><input type="text" name="dnote_{{ d.id }}" value="{{ x.notes if x and x.notes else '' }}"></td>
+  <td class="num"><input type="number" step="0.25" class="w80" name="cycle_{{ d.id }}" value="{{ x.cycle_hours_left if x and x.cycle_hours_left else '' }}" placeholder="{{ st.reset_after_hours|int }}"></td>
+  <td class="num detail"><input type="number" step="0.25" class="w80" name="drive_{{ d.id }}" value="{{ x.drive_hours_left if x and x.drive_hours_left else '' }}" placeholder="{{ d.max_drive_hours or st.max_drive_hours }}"></td>
+  <td class="num detail"><input type="number" step="0.25" class="w80" name="duty_{{ d.id }}" value="{{ x.duty_hours_left if x and x.duty_hours_left else '' }}" placeholder="{{ d.max_duty_hours or st.max_duty_hours }}"></td>
+  <td class="muted">{% if x and x.hos_synced_at %}{{ x.hos_status or '' }}<br><span class="th-sub">{{ x.hos_synced_at.strftime('%m/%d %H:%M') }}Z</span>{% endif %}</td>
+  <td class="detail"><input type="text" name="dnote_{{ d.id }}" value="{{ x.notes if x and x.notes else '' }}"></td>
 </tr>
 {% endfor %}
-{% if not drv_rows %}<tr><td colspan="11" class="muted">No active drivers. Add them on the <a href="/drivers">Drivers</a> page.</td></tr>{% endif %}
+{% if not drv_rows %}<tr><td colspan="9" class="muted">No active drivers. Add them on the <a href="/drivers">Drivers</a> page.</td></tr>{% endif %}
 </table></div>
-<p><button type="submit">Save driver availability</button> <span class="muted">Blank hours = the driver's normal limits. Enter lower numbers for a driver who is short on hours today.</span></p>
+<p><button type="submit">Save drivers for {{ weekday }} {{ short_date }}</button></p>
 </form>
+</section>
 
-<h2 id="plan">3. Build the plan</h2>
-<div class="card">
-  <form method="post" action="/day/{{ plan_date }}/plan" class="bar" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Building… ({{ st.solver_seconds|int }} s)';">
-    <button type="submit">{{ 'Rebuild plan' if plan else 'Build plan' }}</button>
-    <span class="muted">Takes about {{ st.solver_seconds|int }} seconds (Settings → Optimizer thinking time). Save any changes to loads and drivers above first.</span>
-    {% if plan_row %}<a class="btn secondary" href="/plan/{{ plan_row.id }}/print" target="_blank">Print view</a>
-    <span class="muted">Last built {{ plan.generated_at }} UTC</span>{% endif %}
-  </form>
-</div>
+{# ================= 3. PLAN ================= #}
+<section class="panel" id="plan">
+<div class="panel-head"><h2>Step 3 · Build the plan for {{ weekday }} {{ short_date }}</h2></div>
+<form method="post" action="/day/{{ plan_date }}/plan" class="bar" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Building… about {{ st.solver_seconds|int }} seconds';">
+  <button type="submit">{{ 'Rebuild plan' if plan else 'Build plan' }}</button>
+  <span class="muted">Save any changes in steps 1 and 2 first. Takes about {{ st.solver_seconds|int }} seconds.</span>
+  {% if plan_row %}<a class="btn secondary" href="/plan/{{ plan_row.id }}/print" target="_blank">Print view</a><span class="muted">last built {{ plan.generated_at }} UTC</span>{% endif %}
+</form>
 {% if plan %}{% include "_plan.html" %}{% endif %}
+</section>
 {% endblock %}

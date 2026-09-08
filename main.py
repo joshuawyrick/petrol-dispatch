@@ -407,7 +407,9 @@ def _day_ctx(s: Session, plan_date: str):
     d0 = datetime.strptime(plan_date, "%Y-%m-%d").date()
     latest = s.query(Plan).filter(Plan.plan_date == plan_date).order_by(Plan.id.desc()).first()
     plan = json.loads(latest.result_json) if latest else None
-    return dict(plan=plan, plan_row=latest, plan_date=plan_date, standing_added=added, weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
+    return dict(plan=plan, plan_row=latest, plan_date=plan_date, standing_added=added,
+                today=date.today().isoformat(), tomorrow=(date.today() + timedelta(days=1)).isoformat(),
+                weekday_long=d0.strftime("%A"), pretty_date=d0.strftime("%B %-d, %Y"), short_date=d0.strftime("%b %-d"), weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
                 avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"],
                 has_samsara=bool(samsara.token()))
