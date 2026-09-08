@@ -53,17 +53,13 @@ def sync_drivers(s: Session) -> str:
         if d:
             d.samsara_id = sid; d.samsara_vehicle = veh
             if veh and not d.truck: d.truck = veh
-            if not d.active: d.active = True
-            updated += 1
+            updated += 1                      # active/inactive is left exactly as the dispatcher set it
         else:
             s.add(Driver(name=name, samsara_id=sid, samsara_vehicle=veh, truck=veh, active=True)); added += 1
-    deactivated = 0
-    for sid, d in by_sid.items():
-        if sid not in seen and d.active:
-            d.active = False; deactivated += 1
+    gone = [d.name for sid, d in by_sid.items() if sid not in seen and d.active]
     s.commit()
     msg = f"Samsara: {added} driver(s) added, {updated} matched"
-    if deactivated: msg += f", {deactivated} no longer active in Samsara → marked inactive"
+    if gone: msg += f". No longer active in Samsara (left as-is here, untick Active if they're gone): {', '.join(gone[:5])}"
     if added: msg += ". New drivers need a home yard — open each one on the Drivers page."
     return msg if msg.endswith(".") else msg + "."
 

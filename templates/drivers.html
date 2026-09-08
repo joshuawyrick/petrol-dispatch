@@ -12,10 +12,11 @@
   <span class="muted">{{ rows|length }} shown · defaults: {{ st.max_drive_hours }} drive / {{ st.max_duty_hours }} on-duty hours</span>
 </form>
 <div class="wrap"><table>
-<tr><th>Name</th><th>Home yard</th><th>Truck</th><th>Samsara</th><th>Usual shift</th><th class="num">Max drive</th><th class="num">Max on-duty</th><th>Days off</th><th>Notes</th></tr>
+<tr><th>Active</th><th>Name</th><th>Home yard</th><th>Truck</th><th>Samsara</th><th>Usual shift</th><th class="num">Max drive</th><th class="num">Max on-duty</th><th>Days off</th><th>Notes</th></tr>
 {% for d in rows %}
 <tr {% if not d.active %}class="bad"{% endif %}>
-  <td><a href="/drivers/{{ d.id }}">{{ d.name }}</a>{% if not d.active %} <span class="pill">inactive</span>{% endif %}</td>
+  <td><form method="post" action="/drivers/{{ d.id }}/toggle"><button type="submit" class="small {% if d.active %}secondary{% endif %}" title="Click to switch">{{ 'Active' if d.active else 'Inactive' }}</button></form></td>
+  <td><a href="/drivers/{{ d.id }}">{{ d.name }}</a>{% if not d.yard %} <span class="pill" style="background:#fde8e8">needs yard</span>{% endif %}</td>
   <td>{{ d.yard.name if d.yard else '—' }}</td>
   <td>{{ d.truck or '' }}</td>
   <td class="muted">{% if d.samsara_id %}linked{% if d.samsara_vehicle %} · {{ d.samsara_vehicle }}{% endif %}{% endif %}</td>
@@ -26,7 +27,7 @@
   <td class="muted">{{ d.notes or '' }}</td>
 </tr>
 {% endfor %}
-{% if not rows %}<tr><td colspan="9" class="muted">No drivers yet. Click "+ Add driver" or "Sync drivers from Samsara".</td></tr>{% endif %}
+{% if not rows %}<tr><td colspan="10" class="muted">No drivers yet. Click "+ Add driver" or "Sync drivers from Samsara".</td></tr>{% endif %}
 </table></div>
-<p class="muted">Two drivers with the same truck number share that truck: the second can't leave the yard until the first is back. Daily availability and remaining hours are entered on the Daily Plan page.</p>
+<p class="muted"><b>Active</b> drivers show up on the Daily Plan page and can be planned; <b>inactive</b> ones are ignored completely (use it for drivers on leave, terminated, or seasonal). Click the button to switch. Syncing from Samsara never changes this flag.<br>Two drivers with the same truck number share that truck: the second can't leave the yard until the first is back. Daily availability and remaining hours are entered on the Daily Plan page.</p>
 {% endblock %}

@@ -305,6 +305,14 @@ def drivers(request: Request, show_inactive: int = 0, s: Session = Depends(get_d
     return render(request, "drivers.html", rows=rows, show_inactive=show_inactive, st=st, has_samsara=bool(samsara.token()))
 
 
+@app.post("/drivers/{drv_id}/toggle")
+def driver_toggle(drv_id: int, s: Session = Depends(get_db)):
+    d = s.get(Driver, drv_id)
+    d.active = not d.active
+    s.commit()
+    return RedirectResponse(f"/drivers?show_inactive=1&msg={d.name}+is+now+{'ACTIVE' if d.active else 'INACTIVE'}", status_code=303)
+
+
 @app.post("/drivers/samsara")
 def drivers_samsara(s: Session = Depends(get_db)):
     return RedirectResponse(f"/drivers?msg={samsara.sync_drivers(s)}", status_code=303)
