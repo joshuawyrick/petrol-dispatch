@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ loc.name if loc else 'New location' }}{% endblock %}
+{% block content %}
+<h1>{{ loc.name if loc else 'New location' }}</h1>
+<form class="form" method="post" action="/locations/save">
+  {% if loc %}<input type="hidden" name="id" value="{{ loc.id }}">{% endif %}
+  <div class="row"><label>Name</label><input type="text" name="name" required value="{{ loc.name if loc else '' }}"></div>
+  <div class="row"><label>Type</label><select name="kind">{% for k in kinds %}<option value="{{ k }}" {% if loc and loc.kind == k %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></div>
+  <div class="row"><label>Latitude</label><input type="number" step="any" name="lat" required value="{{ loc.lat if loc else '' }}"></div>
+  <div class="row"><label>Longitude</label><input type="number" step="any" name="lon" required value="{{ loc.lon if loc else '' }}"></div>
+  <div class="row"><label>Active</label><input type="checkbox" name="active" value="1" {% if not loc or loc.active %}checked{% endif %}></div>
+  <div class="row"><label>Avg bbl from history</label><span>{{ '%.1f'|format(loc.avg_bbl_history) if loc and loc.avg_bbl_history else 'none' }} <span class="muted">({{ loc.loads_history if loc else 0 }} loads)</span></span></div>
+  <div class="row"><label>Pin avg bbl (optional)</label><input type="number" step="any" name="avg_bbl_override" value="{{ loc.avg_bbl_override if loc and loc.avg_bbl_override else '' }}"></div>
+  <div class="hint">Leave blank to use history (never below the minimum in Settings). Enter a number to force a value for pricing.</div>
+  <div class="row"><label>Load / offload minutes</label><input type="number" name="load_minutes" value="{{ loc.load_minutes if loc and loc.load_minutes else '' }}"></div>
+  <div class="hint">Blank = the default from Settings (60). Set if this site is consistently faster or slower.</div>
+  <div class="row"><label>Open from</label><input type="time" name="open_time" value="{{ loc.open_time if loc and loc.open_time else '' }}"></div>
+  <div class="row"><label>Open until</label><input type="time" name="close_time" value="{{ loc.close_time if loc and loc.close_time else '' }}"></div>
+  <div class="hint">Leave both blank if trucks can load / offload here any time.</div>
+  <div class="row"><label>Max trucks at once</label><input type="number" name="max_trucks_at_once" value="{{ loc.max_trucks_at_once if loc and loc.max_trucks_at_once else '' }}"></div>
+  <div class="hint">Blank = no limit. Set to 1 if trucks must queue behind each other here.</div>
+  <div class="row"><label>Notes</label><textarea name="notes">{{ loc.notes if loc and loc.notes else '' }}</textarea></div>
+  <p><button type="submit">Save</button> <a class="btn secondary" href="/locations">Back</a></p>
+</form>
+{% if loc and lanes %}
+<h2>Lanes using this location</h2>
+<div class="wrap"><table>
+<tr><th>Account</th><th>Pickup</th><th>Drop-off</th><th class="num">Rate</th><th class="num">Driver pay</th></tr>
+{% for l in lanes %}<tr><td>{{ l.account or '' }}</td><td><a href="/lanes/{{ l.id }}">{{ l.pickup.name }}</a></td><td>{{ l.dropoff.name }}</td>
+<td class="num">{{ '$%.2f'|format(l.rate) if l.rate else '—' }}</td><td class="num">{{ '$%.4f'|format(l.driver_pay) if l.driver_pay else '—' }}</td></tr>{% endfor %}
+</table></div>
+{% endif %}
+{% endblock %}

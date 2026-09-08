@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Mileage{% endblock %}
+{% block content %}
+<h1>Mileage</h1>
+<div class="cards">
+  <div class="card"><div class="n">{{ cov.needed }}</div><div class="l">Location pairs the planner can use</div></div>
+  <div class="card"><div class="n">{{ cov.have }}</div><div class="l">With road miles (Google or override)</div></div>
+  <div class="card"><div class="n">{{ cov.missing }}</div><div class="l">Still missing</div></div>
+</div>
+<div class="card">
+  <p>Road miles are looked up <b>once</b> per pair and stored. New locations or lanes only add the pairs that are new.
+     Drive time = miles ÷ {{ speed }} mph (your average speed from Settings), not Google's estimate.</p>
+  <form method="post" action="/mileage/fetch" style="display:inline">
+    <button type="submit" {% if not has_key %}disabled title="Add GOOGLE_MAPS_API_KEY under Secrets first"{% endif %}>Fetch missing pairs from Google ({{ cov.missing }})</button>
+  </form>
+  <form method="post" action="/mileage/straight" style="display:inline">
+    <button type="submit" class="secondary">Estimate missing as straight-line × 1.3 (temporary)</button>
+  </form>
+  {% if not has_key %}<p class="muted">Google key not found. Add <code>GOOGLE_MAPS_API_KEY</code> in Replit → Secrets, then restart the app.</p>{% endif %}
+</div>
+
+<h2>Look up or override a pair</h2>
+<form class="bar" method="get" action="/mileage">
+  <input type="text" name="q" placeholder="Search origin or destination name…" value="{{ q }}">
+  <select name="only"><option value="">all pairs</option><option value="override" {% if only=='override' %}selected{% endif %}>overrides only</option><option value="straight" {% if only=='straight' %}selected{% endif %}>straight-line estimates only</option></select>
+  <button type="submit" class="secondary">Search</button>
+  <span class="muted">Enter your approved-route miles in the Override column for pairs where the map route is not usable for a loaded hazmat truck.</span>
+</form>
+{% if rows %}
+<div class="wrap"><table>
+<tr><th>From</th><th>To</th><th class="num">Google miles</th><th class="num">Google min</th><th>Source</th><th>Override (miles / minutes / note)</th><th class="num">Used miles</th></tr>
+{% for d in rows %}
+<tr>
+  <td>{{ d.origin.name }}</td><td>{{ d.dest.name }}</td>
+  <td class="num">{{ '%.1f'|format(d.google_miles) if d.google_miles else '' }}</td>
+  <td class="num">{{ '%.0f'|format(d.google_minutes) if d.google_minutes else '' }}</td>
+  <td><span class="pill">{{ d.source or '' }}</span></td>
+  <td><form class="inline" method="post" action="/mileage/override">
+      <input type="hidden" name="id" value="{{ d.id }}"><input type="hidden" name="q" value="{{ q }}">
+      <input type="number" step="0.1" name="override_miles" placeholder="miles" value="{{ d.override_miles if d.override_miles else '' }}">
+      <input type="number" step="1" name="override_minutes" placeholder="min" value="{{ d.override_minutes if d.override_minutes else '' }}">
+      <input type="text" name="override_note" placeholder="route note" value="{{ d.override_note or '' }}">
+      <button type="submit" class="small">Save</button></form></td>
+  <td class="num"><b>{{ '%.1f'|format(d.miles) if d.miles else '—' }}</b></td>
+</tr>
+{% endfor %}
+</table></div>
+{% elif q or only %}<p class="muted">No stored pairs match. Pairs appear here after they have been fetched or estimated.</p>{% endif %}
+{% endblock %}

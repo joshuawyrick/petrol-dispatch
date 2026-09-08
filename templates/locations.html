@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Locations{% endblock %}
+{% block content %}
+<h1>Locations</h1>
+<form class="bar" method="get" action="/locations">
+  <input type="text" name="q" placeholder="Search name…" value="{{ q }}">
+  <select name="kind"><option value="">All types</option>{% for k in kinds %}<option value="{{ k }}" {% if k == kind %}selected{% endif %}>{{ k }}</option>{% endfor %}</select>
+  <label><input type="checkbox" name="show_inactive" value="1" {% if show_inactive %}checked{% endif %}> show inactive</label>
+  <button type="submit" class="secondary">Filter</button>
+  <a class="btn" href="/locations/new">+ Add location</a>
+  <span class="muted">{{ rows|length }} shown</span>
+</form>
+<div class="wrap"><table>
+<tr><th>Name</th><th>Type</th><th class="num">Lat</th><th class="num">Lon</th><th class="num">Loads (hist.)</th><th class="num">Avg bbl (pricing)</th><th>Hours</th><th>Notes</th></tr>
+{% for r in rows %}
+<tr {% if not r.active %}class="bad"{% endif %}>
+  <td><a href="/locations/{{ r.id }}">{{ r.name }}</a>{% if not r.active %} <span class="pill">inactive</span>{% endif %}</td>
+  <td><span class="pill {{ r.kind }}">{{ r.kind }}</span></td>
+  <td class="num">{{ '%.5f'|format(r.lat) }}</td><td class="num">{{ '%.5f'|format(r.lon) }}</td>
+  <td class="num">{{ r.loads_history or '' }}</td>
+  <td class="num">{% if r.kind != 'dropoff' and r.kind != 'yard' %}{{ '%.1f'|format(r.billable_bbl(min_bbl)) }}{% if r.avg_bbl_override %} <span class="pill">pinned</span>{% endif %}{% endif %}</td>
+  <td>{% if r.open_time or r.close_time %}{{ r.open_time or '…' }}–{{ r.close_time or '…' }}{% endif %}</td>
+  <td class="muted">{{ r.notes or '' }}</td>
+</tr>
+{% endfor %}
+</table></div>
+{% endblock %}

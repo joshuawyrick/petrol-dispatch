@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="muted">Every number the planner assumes. Change a value and click Save.</p>
+<form method="post" action="/settings">
+<div class="wrap"><table>
+<tr><th>Setting</th><th>Value</th><th>Unit</th><th>Note</th></tr>
+{% for r in rows %}
+<tr {% if r.value is none %}class="warn"{% endif %}>
+  <td>{{ r.label }}</td>
+  <td><input type="number" step="any" name="{{ r.key }}" value="{{ '' if r.value is none else r.value }}" style="width:110px"></td>
+  <td>{{ r.unit }}</td>
+  <td class="muted">{{ r.note }}</td>
+</tr>
+{% endfor %}
+</table></div>
+<p><button type="submit">Save settings</button></p>
+</form>
+{% endblock %}

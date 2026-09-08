@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Petrol Dispatch{% endblock %} · Petrol Dispatch Optimizer</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">Petrol Dispatch Optimizer</a>
+  <nav>
+    <a href="/" {% if request.url.path == '/' %}class="on"{% endif %}>Dashboard</a>
+    <a href="/locations" {% if request.url.path.startswith('/locations') %}class="on"{% endif %}>Locations</a>
+    <a href="/lanes" {% if request.url.path.startswith('/lanes') %}class="on"{% endif %}>Lanes</a>
+    <a href="/mileage" {% if request.url.path.startswith('/mileage') %}class="on"{% endif %}>Mileage</a>
+    <a href="/settings" {% if request.url.path.startswith('/settings') %}class="on"{% endif %}>Settings</a>
+  </nav>
+</header>
+<main>
+  {% if msg %}<div class="flash">{{ msg }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>
