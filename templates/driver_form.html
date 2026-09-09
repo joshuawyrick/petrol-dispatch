@@ -5,7 +5,9 @@
 <form class="form" method="post" action="/drivers/save">
   {% if drv %}<input type="hidden" name="id" value="{{ drv.id }}">{% endif %}
   <div class="row"><label>Name</label><input type="text" name="name" required value="{{ drv.name if drv else '' }}"></div>
-  <div class="row"><label>Home yard</label><select name="yard_id">{% for y in yards %}<option value="{{ y.id }}" {% if drv and drv.yard_id == y.id %}selected{% endif %}>{{ y.name }}</option>{% endfor %}</select></div>
+  <div class="row"><label>Company</label><select name="company_id">{% for c in cos %}<option value="{{ c.id }}" {% if (drv and drv.company_id == c.id) or (not (drv and drv.company_id) and c.is_petrol) %}selected{% endif %}>{{ c.name }}{% if not c.is_petrol %} (sub-hauler, keeps {{ c.share_pct }}%){% endif %}</option>{% endfor %}</select></div>
+  <div class="hint">Sub-hauler shares and dispatch phones are set on the <a href="/companies">Companies</a> page.</div>
+  <div class="row"><label>Home yard</label><select name="yard_id"><option value="" {% if not drv or not drv.yard_id %}selected{% endif %}>— not set (left out of planning) —</option>{% for y in yards %}<option value="{{ y.id }}" {% if drv and drv.yard_id == y.id %}selected{% endif %}>{{ y.name }}</option>{% endfor %}</select></div>
   <div class="row"><label>Truck number</label><input type="text" name="truck" value="{{ drv.truck if drv and drv.truck else '' }}"></div>
   <div class="hint">Give two drivers the same truck number if they share a truck. Leave blank for a single-man truck.</div>
   <div class="row"><label>Usual shift</label><select name="usual_shift"><option value="">—</option><option value="AM" {% if drv and drv.usual_shift=='AM' %}selected{% endif %}>AM</option><option value="PM" {% if drv and drv.usual_shift=='PM' %}selected{% endif %}>PM</option></select></div>

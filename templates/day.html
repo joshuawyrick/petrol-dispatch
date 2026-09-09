@@ -96,13 +96,13 @@
 {% for r in drv_rows %}{% set d = r.d %}{% set x = r.x %}
 <tr {% if not r.available %}class="bad"{% endif %}>
   <td><input type="checkbox" name="avail_{{ d.id }}" value="1" {% if r.available %}checked{% endif %}>{% if r.off_today %} <span class="pill" title="regular day off">off</span>{% endif %}</td>
-  <td><b>{{ d.name }}</b><br><span class="muted">{{ d.yard.name if d.yard else 'NO YARD — set it on the Drivers page' }}{% if d.truck %} · truck {{ d.truck }}{% endif %}</span></td>
+  <td><b>{{ d.name }}</b>{% if d.is_sub %} <span class="pill sub" title="sub-hauler: keeps {{ d.company.share_pct|int }}% of load pay + fuel surcharge">{{ d.company_short }}</span>{% endif %}<br><span class="muted">{{ d.yard.name if d.yard else 'NO YARD — set it on the Drivers page' }}{% if d.truck %} · truck {{ d.truck }}{% endif %}</span></td>
   <td><select name="shift_{{ d.id }}"><option value="AM" {% if r.shift=='AM' %}selected{% endif %}>AM</option><option value="PM" {% if r.shift=='PM' %}selected{% endif %}>PM</option></select></td>
   <td><input type="time" name="start_{{ d.id }}" value="{{ x.start_time if x and x.start_time else '' }}"></td>
   <td class="num"><input type="number" step="0.25" class="w80" name="cycle_{{ d.id }}" value="{{ x.cycle_hours_left if x and x.cycle_hours_left else '' }}" placeholder="{{ st.reset_after_hours|int }}"></td>
   <td class="num detail"><input type="number" step="0.25" class="w80" name="drive_{{ d.id }}" value="{{ x.drive_hours_left if x and x.drive_hours_left else '' }}" placeholder="{{ d.max_drive_hours or st.max_drive_hours }}"></td>
   <td class="num detail"><input type="number" step="0.25" class="w80" name="duty_{{ d.id }}" value="{{ x.duty_hours_left if x and x.duty_hours_left else '' }}" placeholder="{{ d.max_duty_hours or st.max_duty_hours }}"></td>
-  <td class="muted">{% if x and x.hos_synced_at %}{{ x.hos_status or '' }}<br><span class="th-sub">{{ x.hos_synced_at.strftime('%m/%d %H:%M') }}Z</span>{% endif %}</td>
+  <td class="muted">{% if r.call %}<span class="pill review" title="this sub-hauler has no Samsara — call their dispatch and type the hours in">call for hours</span>{% if r.phone %}<br><span class="th-sub">{{ r.phone }}</span>{% endif %}{% elif x and x.hos_synced_at %}{{ x.hos_status or '' }}<br><span class="th-sub">{{ x.hos_synced_at.strftime('%m/%d %H:%M') }}Z</span>{% endif %}</td>
   <td class="detail"><input type="text" name="dnote_{{ d.id }}" value="{{ x.notes if x and x.notes else '' }}"></td>
 </tr>
 {% endfor %}

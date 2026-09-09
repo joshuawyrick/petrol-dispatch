@@ -104,7 +104,10 @@ def pull_hos(s: Session, plan_date: str) -> str:
         if veh: d.samsara_vehicle = veh
         s.add(x); n += 1
     s.commit()
-    missing = [d.name for d in s.query(Driver).filter(Driver.active == True).all() if not d.samsara_id]
+    active = s.query(Driver).filter(Driver.active == True).all()
+    missing = [d.name for d in active if not d.samsara_id and not (d.company and not d.company.is_petrol and not d.company.has_samsara)]
+    by_phone = sorted({d.company.short_name or d.company.name for d in active if d.company and not d.company.is_petrol and not d.company.has_samsara})
     msg = f"Samsara hours pulled for {n} driver(s) ({'today: drive/shift/cycle' if is_today else 'future date: cycle hours only'})."
     if missing: msg += f" Not linked to Samsara: {', '.join(missing[:6])}{'…' if len(missing) > 6 else ''} — click 'Sync drivers from Samsara' on the Drivers page."
+    if by_phone: msg += f" Hours for {', '.join(by_phone)} drivers are entered by hand (call their dispatch)."
     return msg

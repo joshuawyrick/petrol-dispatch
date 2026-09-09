@@ -1,6 +1,6 @@
 """Load the confirmed master data (data/*.csv) into an empty database."""
 import csv
-from db import SessionLocal, Setting, Location, Lane, init_db
+from db import SessionLocal, Setting, Location, Lane, Company, Driver, init_db
 
 SETTINGS = [
     # key, value, label, unit, note
@@ -30,6 +30,75 @@ SETTINGS = [
 ]
 
 
+# name, short name, sub-hauler's share of load pay (%) — None = Petrol Transport itself
+COMPANIES = [
+    ("Petrol Transport Inc.", "Petrol", None),
+    ("MKB Transportation, Inc.", "MKB", 90),
+    ("King D Trucking, Inc.", "King D", 90),
+    ("Copperhead Oil Field Services", "Copperhead", 90),
+    ("Quail Canyon Transport, Inc.", "Quail Canyon", 90),
+    ("Flying B Transport, Inc.", "Flying B", 90),
+    ("J&V Transport, LLC", "J&V", 75),
+    ("Transportillo, LLC", "Transportillo", 75),
+    ("California Coast Services LLC", "Cal Coast", 75),
+    ("J Oregon Trucking LLC", "J Oregon", 75),
+    ("Maye Trucking", "Maye", 75),
+    ("Lucas Trucking, LLC", "Lucas", 75),
+]
+
+
+def ensure_companies(s) -> int:
+    """Make sure Petrol + the known sub-haulers exist (never changes a share % the dispatcher already edited)."""
+    have = {c.name.strip().lower(): c for c in s.query(Company).all()}
+    n = 0
+    for name, short, share in COMPANIES:
+        if name.lower() in have: continue
+        s.add(Company(name=name, short_name=short, is_petrol=share is None, share_pct=share, has_samsara=share is None, active=True))
+        n += 1
+    if n: s.commit()
+    return n
+
+
+def petrol_company(s):
+    return s.query(Company).filter(Company.is_petrol == True).first()
+
+
+def _norm_name(n: str) -> str:
+    """'GUERRA , EDDIE' / 'Eddie Guerra' / 'guerra, eddie' -> 'eddie guerra' so spreadsheet and Samsara names match."""
+    n = n.replace("\xa0", " ").strip().lower()
+    if "," in n:
+        last, first = [x.strip() for x in n.split(",", 1)]
+        n = f"{first} {last}"
+    parts = n.split()
+    return f"{parts[0]} {parts[-1]}" if len(parts) > 1 else n       # first + last name only (middle names differ between systems)
+
+
+def import_drivers(s) -> str:
+    """Add drivers from data/drivers.csv (name, company, truck, active). Existing drivers (same name, either name order)
+    are updated with company and truck only; nothing else about them changes."""
+    ensure_companies(s)
+    cos = {c.name.strip().lower(): c for c in s.query(Company).all()}
+    petrol = petrol_company(s)
+    existing = {_norm_name(d.name): d for d in s.query(Driver).all()}
+    added = updated = 0
+    with open("data/drivers.csv", newline="") as fh:
+        for r in csv.DictReader(fh):
+            name = r["name"].strip()
+            co = cos.get((r.get("company") or "").strip().lower()) or petrol
+            truck = (r.get("truck") or "").strip() or None
+            active = (r.get("active") or "1").strip() not in ("0", "no", "false")
+            d = existing.get(_norm_name(name))
+            if d:
+                d.company_id = co.id
+                if truck and not d.truck: d.truck = truck
+                updated += 1
+            else:
+                d = Driver(name=name, company_id=co.id, truck=truck, active=active)
+                s.add(d); existing[_norm_name(name)] = d; added += 1
+    s.commit()
+    return f"Drivers imported: {added} added, {updated} already existed (company and truck filled in)."
+
+
 def seed(force: bool = False):
     init_db()
     s = SessionLocal()
@@ -41,6 +110,7 @@ def seed(force: bool = False):
             else:
                 row.label, row.unit, row.note, row.sort = label, unit, note, i
         s.commit()
+        ensure_companies(s)
         if s.query(Location).count() and not force:
             return "already seeded"
         by_name = {}

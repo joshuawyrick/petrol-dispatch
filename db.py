@@ -105,12 +105,49 @@ class Distance(Base):
         return self.override_miles if self.override_miles else self.google_miles
 
 
+class Company(Base):
+    """A hauling company: Petrol Transport itself (is_petrol) or a sub-hauler that runs loads for us.
+
+    Sub-haulers get `share_pct` of the load pay (e.g. 75 or 90) plus the entire fuel surcharge; they cover their own
+    drivers' pay and fuel. Petrol keeps the rest of the load pay as its margin.
+    """
+    __tablename__ = "companies"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), unique=True, nullable=False)
+    short_name = Column(String(30))                    # badge label on the plan: "King D", "MKB"
+    is_petrol = Column(Boolean, default=False)         # exactly one row: our own drivers (per-lane driver pay)
+    share_pct = Column(Float)                          # sub-hauler's share of load pay, in percent (75 = sub keeps 75%)
+    dispatch_phone = Column(String(60))
+    has_samsara = Column(Boolean, default=False)       # if false, dispatch calls the sub for hours; Samsara pull skips them
+    active = Column(Boolean, default=True)
+    notes = Column(Text)
+
+    @property
+    def petrol_pct(self):
+        return None if self.is_petrol or self.share_pct is None else round(100 - self.share_pct, 2)
+
+
+class CompanyLaneRate(Base):
+    """A special deal for one sub-hauler on one lane: either a different share % or a flat $/bbl the sub gets."""
+    __tablename__ = "company_lane_rates"
+    __table_args__ = (UniqueConstraint("company_id", "lane_id", name="uq_company_lane"),)
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    lane_id = Column(Integer, ForeignKey("lanes.id"), nullable=False)
+    share_pct = Column(Float)                          # overrides the company default share for this lane
+    flat_bbl = Column(Float)                           # or: the sub gets this many $/bbl on this lane (wins over share_pct)
+    notes = Column(String(200))
+    company = relationship("Company")
+    lane = relationship("Lane")
+
+
 class Driver(Base):
     """A driver: home yard, personal hour limits, regular days off, truck sharing."""
     __tablename__ = "drivers"
     id = Column(Integer, primary_key=True)
     name = Column(String(120), nullable=False)
     yard_id = Column(Integer, ForeignKey("locations.id"))
+    company_id = Column(Integer, ForeignKey("companies.id"))   # blank = Petrol Transport
     active = Column(Boolean, default=True)
     truck = Column(String(40))                         # truck number; two drivers with the same truck share it
     max_drive_hours = Column(Float)                    # None = Settings default (10)
@@ -121,6 +158,16 @@ class Driver(Base):
     samsara_vehicle = Column(String(80))               # vehicle name Samsara reports for this driver
     notes = Column(Text)
     yard = relationship("Location", foreign_keys=[yard_id])
+    company = relationship("Company")
+
+    @property
+    def is_sub(self):
+        return bool(self.company) and not self.company.is_petrol
+
+    @property
+    def company_short(self):
+        """Short label for badges: 'King D', 'MKB', ...; blank for Petrol."""
+        return (self.company.short_name or self.company.name) if self.is_sub else ""
 
 
 class DriverDay(Base):

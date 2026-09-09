@@ -2,7 +2,7 @@
 {% block title %}Settings{% endblock %}
 {% block content %}
 <h1>Settings</h1>
-<p class="muted">Every number the planner assumes. Change a value and click Save. Company name, address and phones for the JMPs are on the <a href="/company">Company details</a> page.</p>
+<p class="muted">Every number the planner assumes. Change a value and click Save. Company name, address and phones for the JMPs are on the <a href="/company">Company details</a> page; sub-hauler pay shares are on the <a href="/companies">Companies</a> page.</p>
 <div class="card" style="margin-bottom:14px">
   <b>Fuel surcharge right now: {{ '%.1f'|format(fsc_pct*100) }}%</b> of freight, from the diesel price below and the surcharge rule (base price, step, % per step).
   {% if info.eia_price_week %}<span class="muted">EIA week ending {{ info.eia_price_week }}; last checked {{ info.eia_last_check }} UTC.</span>{% endif %}

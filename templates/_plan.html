@@ -3,10 +3,10 @@
 <div class="cards">
   <div class="card"><div class="n">{{ T.loads }}</div><div class="l">Loads planned{% if T.unassigned %} · <span class="pri-must">{{ T.unassigned }} not fitted</span>{% endif %}</div></div>
   <div class="card"><div class="n">{{ T.drivers_used }} / {{ T.drivers_available }}</div><div class="l">Drivers used</div></div>
-  <div class="card"><div class="n {% if T.per_hour >= T.target %}ok-n{% else %}bad-n{% endif %}">{{ T.per_hour|money }}/hr</div><div class="l">Gross per shift hour, base (target {{ T.target|money }})</div></div>
+  <div class="card"><div class="n {% if T.per_hour >= T.target %}ok-n{% else %}bad-n{% endif %}">{{ T.per_hour|money }}/hr</div><div class="l">Own trucks: gross per shift hour, base (target {{ T.target|money }})</div></div>
   <div class="card"><div class="n">{{ T.per_hour_fsc|money }}/hr</div><div class="l">with fuel surcharge ({{ '%.1f'|format(T.fsc_pct*100) }}%)</div></div>
-  <div class="card"><div class="n">{{ T.revenue|money }}</div><div class="l">Base revenue · {{ T.revenue_fsc|money }} with FSC</div></div>
-  <div class="card"><div class="n">{{ T.profit|money }}</div><div class="l">Profit after driver pay {{ T.driver_pay|money }}, fuel {{ T.fuel|money }}, inspections {{ T.inspection|money }} · {{ T.profit_fsc|money }} with FSC</div></div>
+  <div class="card"><div class="n">{{ T.revenue|money }}</div><div class="l">Base revenue · {{ T.revenue_fsc|money }} with FSC{% if T.sub_loads %} · {{ T.sub_loads }} load{{ 's' if T.sub_loads != 1 }} on sub-haulers{% endif %}</div></div>
+  <div class="card"><div class="n">{{ T.profit|money }}</div><div class="l">Petrol profit after driver pay {{ T.driver_pay|money }}, fuel {{ T.fuel|money }}, inspections {{ T.inspection|money }}{% if T.sub_pay %}, sub-hauler pay {{ T.sub_pay|money }}{% endif %} · {{ T.profit_fsc|money }} with FSC</div></div>
   <div class="card"><div class="n">{{ '%.1f'|format(T.hours) }} h</div><div class="l">Total shift hours · {{ '%.0f'|format(T.miles) }} miles</div></div>
 </div>
 
@@ -16,10 +16,14 @@
 {% for sh in plan.shifts %}
 <div class="shift {% if not sh.used %}unused{% endif %}">
   <div class="shift-head">
-    <b>{{ sh.driver }}</b> <span class="pill">{{ sh.shift }}</span> {% if sh.truck %}<span class="pill">truck {{ sh.truck }}</span>{% endif %} <span class="muted">{{ sh.yard }}</span>
+    <b>{{ sh.driver }}</b> {% if sh.is_sub %}<span class="pill sub" title="sub-hauler: keeps {{ sh.share_pct|int }}% of load pay plus the fuel surcharge">{{ sh.company }}</span>{% endif %}<span class="pill">{{ sh.shift }}</span> {% if sh.truck %}<span class="pill">truck {{ sh.truck }}</span>{% endif %} <span class="muted">{{ sh.yard }}</span>
     {% if sh.used %}
       · {{ sh.loads }} load{{ 's' if sh.loads != 1 }} · out {{ sh.start|hm }} back {{ sh.end|hm }} · {{ sh.duty_hours }} h on duty (max {{ sh.duty_cap_h }}) · {{ sh.drive_hours }} h driving (max {{ sh.drive_cap_h }}) · {{ '%.0f'|format(sh.loaded_miles) }} loaded / {{ '%.0f'|format(sh.empty_miles) }} empty mi
+      {% if sh.is_sub %}
+      · revenue {{ sh.revenue|money }} · sub gets {{ sh.sub_pay|money }} + FSC {{ sh.sub_fsc|money }} · <b>Petrol margin {{ sh.profit|money }}</b> ({{ sh.margin_per_hour|money }}/hr)
+      {% else %}
       <span class="{% if sh.meets_target %}ok-n{% else %}bad-n{% endif %}"><b>{{ sh.per_hour|money }}/hr</b></span> base · {{ sh.per_hour_fsc|money }}/hr with FSC · revenue {{ sh.revenue|money }} · profit {{ sh.profit|money }}
+      {% endif %}
     {% else %}<span class="muted">· not needed today</span>{% endif %}
   </div>
   {% if sh.used %}
@@ -41,6 +45,19 @@
   {% endif %}
 </div>
 {% endfor %}
+
+{% if plan.by_company and plan.by_company|length > 1 %}
+<h3>By company</h3>
+<div class="wrap"><table>
+<tr><th>Company</th><th class="num">Drivers</th><th class="num">Loads</th><th class="num">bbl</th><th class="num">Hours</th><th class="num">Load pay (base)</th><th class="num">Sub's share</th><th class="num">FSC to sub</th><th class="num">Petrol keeps (base)</th></tr>
+{% for c in plan.by_company %}
+<tr><td>{{ c.company }}</td><td class="num">{{ c.drivers }}</td><td class="num">{{ c.loads }}</td><td class="num">{{ '%.0f'|format(c.bbl) }}</td><td class="num">{{ '%.1f'|format(c.hours) }}</td>
+    <td class="num">{{ c.revenue|money }}</td><td class="num">{{ c.sub_pay|money if c.is_sub else '—' }}</td><td class="num">{{ c.sub_fsc|money if c.is_sub else '—' }}</td>
+    <td class="num"><b>{{ c.profit|money }}</b>{% if not c.is_sub %} <span class="muted">after driver pay, fuel, inspections</span>{% endif %}</td></tr>
+{% endfor %}
+</table></div>
+<p class="muted">Sub-haulers are paid their share of the base load pay plus the entire fuel surcharge; they cover their own drivers and fuel. "Petrol keeps" for a sub is base load pay minus the sub's share.</p>
+{% endif %}
 
 {% if plan.unassigned %}
 <h3 class="pri-must">Not fitted ({{ plan.unassigned|length }})</h3>

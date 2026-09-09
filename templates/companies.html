@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Companies{% endblock %}
+{% block content %}
+<h1>Companies &amp; sub-hauler pay</h1>
+<p class="muted">Petrol Transport drivers are paid the per-lane driver rate. A <b>sub-hauler</b> keeps a share of the base load pay (plus the entire fuel surcharge) and covers its own drivers and fuel; Petrol keeps the rest. <a href="/drivers">Back to drivers</a></p>
+
+<div class="wrap"><table>
+<tr><th>Company</th><th>Badge</th><th class="num">Sub keeps</th><th class="num">Petrol keeps</th><th>Dispatch phone</th><th>Samsara</th><th class="num">Active drivers</th><th>Special lane rates</th><th>Notes</th><th></th></tr>
+{% for c in cos %}
+<tr {% if not c.active %}class="bad"{% endif %}>
+<form method="post" action="/companies/save">
+  <input type="hidden" name="id" value="{{ c.id }}">
+  <td><input type="text" name="name" value="{{ c.name }}" style="min-width:200px" {% if c.is_petrol %}readonly{% endif %}>{% if c.is_petrol %}<br><span class="muted th-sub">our own trucks</span>{% endif %}</td>
+  <td><input type="text" name="short_name" value="{{ c.short_name or '' }}" class="w80" placeholder="King D"></td>
+  <td class="num">{% if c.is_petrol %}—{% else %}<input type="number" step="0.5" min="1" max="100" name="share_pct" class="w60" value="{{ c.share_pct if c.share_pct is not none else '' }}"> %{% endif %}</td>
+  <td class="num">{% if c.is_petrol %}—{% else %}<b>{{ c.petrol_pct if c.petrol_pct is not none else '?' }} %</b>{% endif %}</td>
+  <td><input type="text" name="dispatch_phone" value="{{ c.dispatch_phone or '' }}" style="width:130px" placeholder="661-555-0100"></td>
+  <td>{% if c.is_petrol %}yes{% else %}<label class="chk"><input type="checkbox" name="has_samsara" value="1" {% if c.has_samsara %}checked{% endif %}> has it</label>{% endif %}</td>
+  <td class="num">{{ counts.get(c.id, 0) }}</td>
+  <td>{% if c.is_petrol %}—{% else %}{{ rates_by_co.get(c.id, [])|length }} <a href="#co{{ c.id }}">edit</a>{% endif %}</td>
+  <td><input type="text" name="notes" value="{{ c.notes or '' }}" style="min-width:140px"></td>
+  <td style="white-space:nowrap">{% if not c.is_petrol %}<label class="chk"><input type="checkbox" name="active" value="1" {% if c.active %}checked{% endif %}> active</label> {% endif %}<button type="submit" class="small">Save</button></td>
+</form>
+</tr>
+{% endfor %}
+<tr>
+<form method="post" action="/companies/save">
+  <td><input type="text" name="name" placeholder="New sub-hauler name" style="min-width:200px" required></td>
+  <td><input type="text" name="short_name" class="w80" placeholder="badge"></td>
+  <td class="num"><input type="number" step="0.5" min="1" max="100" name="share_pct" class="w60" placeholder="75"> %</td>
+  <td></td>
+  <td><input type="text" name="dispatch_phone" style="width:130px" placeholder="phone"></td>
+  <td><label class="chk"><input type="checkbox" name="has_samsara" value="1"> has it</label></td>
+  <td></td><td></td>
+  <td><input type="text" name="notes" style="min-width:140px"></td>
+  <td><button type="submit" class="small">+ Add</button></td>
+</form>
+</tr>
+</table></div>
+<p class="muted">"Sub keeps" is the sub-hauler's share of the base load pay (75 means the sub gets $75 of a $100 load and Petrol keeps $25). The badge is the short name shown next to their drivers on the Daily Plan. Untick "has it" for subs without Samsara — their drivers show a <span class="pill review">call for hours</span> tag on the Daily Plan and are skipped by the Samsara pull. Making a company inactive hides nothing; it's just a note.</p>
+
+<h2 style="margin-top:22px">Special lane rates</h2>
+<p class="muted">Only needed when a sub has a different deal on one lane. Enter <b>either</b> a share % <b>or</b> a flat $/bbl the sub gets on that lane. Lanes without a special rate use the company's normal share.</p>
+{% for c in cos if not c.is_petrol %}
+<div class="card" id="co{{ c.id }}" style="margin-bottom:10px">
+  <b>{{ c.name }}</b> <span class="muted">normally keeps {{ c.share_pct }}%</span>
+  {% set rs = rates_by_co.get(c.id, []) %}
+  {% if rs %}
+  <table style="margin-top:6px">
+  <tr><th>Lane</th><th class="num">Sub keeps</th><th class="num">or flat $/bbl</th><th>Note</th><th></th></tr>
+  {% for r in rs %}
+  <tr><td>{{ r.lane.pickup.name }} → {{ r.lane.dropoff.name }}{% if r.lane.account %} <span class="muted">({{ r.lane.account[:22] }})</span>{% endif %} <span class="muted">lane rate ${{ '%.2f'|format(r.lane.rate or 0) }}/bbl</span></td>
+      <td class="num">{{ (r.share_pct|string + ' %') if r.share_pct is not none else '—' }}</td>
+      <td class="num">{{ ('$' + '%.3f'|format(r.flat_bbl)) if r.flat_bbl else '—' }}</td>
+      <td class="muted">{{ r.notes or '' }}</td>
+      <td><form method="post" action="/companies/{{ c.id }}/lane" style="display:inline"><input type="hidden" name="lane_id" value="{{ r.lane_id }}"><button type="submit" name="action" value="delete" class="small secondary" onclick="return confirm('Remove this special rate?')">✕</button></form></td></tr>
+  {% endfor %}
+  </table>
+  {% endif %}
+  <form method="post" action="/companies/{{ c.id }}/lane" class="bar" style="margin-top:8px">
+    <select name="lane_id" required style="min-width:320px"><option value="">— choose lane —</option>{% for ln in lanes_all %}<option value="{{ ln.id }}">{{ ln.pickup.name }} → {{ ln.dropoff.name }}{% if ln.account %} ({{ ln.account[:22] }}){% endif %}</option>{% endfor %}</select>
+    <label>sub keeps <input type="number" step="0.5" min="1" max="100" name="share_pct" class="w60"> %</label>
+    <label>or flat $<input type="number" step="0.001" name="flat_bbl" class="w80">/bbl</label>
+    <input type="text" name="notes" placeholder="note" style="width:150px">
+    <button type="submit" class="small">Add special rate</button>
+  </form>
+</div>
+{% endfor %}
+{% endblock %}

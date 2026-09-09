@@ -1,0 +1,12 @@
+run = "sh run.sh"
+entrypoint = "main.py"
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["sh", "-c", "sh run.sh"]
+
+[[ports]]
+localPort = 8000
+externalPort = 80

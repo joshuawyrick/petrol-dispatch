@@ -11,8 +11,9 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
-from db import SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, StandingOrder, CompanyInfo, JmpDoc, init_db
-from seed import seed
+from db import (SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, StandingOrder, CompanyInfo, JmpDoc,
+                Company, CompanyLaneRate, init_db)
+from seed import seed, ensure_companies, import_drivers, petrol_company
 import mileage, fsc, optimizer, samsara, jmp
 from fastapi.responses import Response
 import json
@@ -467,15 +468,91 @@ async def company_save(request: Request, s: Session = Depends(get_db)):
     return RedirectResponse("/company?msg=Company+details+saved", status_code=303)
 
 
+# ---------------- Companies (Petrol + sub-haulers) ----------------
+def _companies(s):
+    ensure_companies(s)
+    return sorted(s.query(Company).all(), key=lambda c: (not c.is_petrol, c.name.lower()))
+
+
+@app.get("/companies", response_class=HTMLResponse)
+def companies_page(request: Request, s: Session = Depends(get_db)):
+    cos = _companies(s)
+    counts = {}
+    for d in s.query(Driver).filter(Driver.active == True).all():
+        counts[d.company_id] = counts.get(d.company_id, 0) + 1
+    petrol = petrol_company(s)
+    counts[petrol.id] = counts.get(petrol.id, 0) + counts.pop(None, 0)      # drivers with no company = Petrol
+    rates = s.query(CompanyLaneRate).options(joinedload(CompanyLaneRate.lane).joinedload(Lane.pickup),
+                                             joinedload(CompanyLaneRate.lane).joinedload(Lane.dropoff)).all()
+    rates_by_co = {}
+    for r in rates: rates_by_co.setdefault(r.company_id, []).append(r)
+    lanes_all = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).filter(Lane.active == True).all()
+    lanes_all.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
+    return render(request, "companies.html", cos=cos, counts=counts, rates_by_co=rates_by_co, lanes_all=lanes_all)
+
+
+@app.post("/companies/save")
+async def companies_save(request: Request, s: Session = Depends(get_db)):
+    f = await request.form()
+    c = s.get(Company, int(f["id"])) if f.get("id") else Company(is_petrol=False)
+    name = (f.get("name") or "").strip()
+    if not name: return RedirectResponse("/companies?msg=Company+name+is+required", status_code=303)
+    c.name = name
+    c.short_name = (f.get("short_name") or "").strip() or None
+    c.dispatch_phone = (f.get("dispatch_phone") or "").strip() or None
+    c.notes = (f.get("notes") or "").strip() or None
+    c.has_samsara = True if c.is_petrol else bool(f.get("has_samsara"))
+    c.active = bool(f.get("active")) if f.get("id") else True
+    if not c.is_petrol:
+        pct = fnum(f.get("share_pct"))
+        if pct is None or not (0 < pct <= 100):
+            return RedirectResponse("/companies?msg=Enter+the+sub-hauler's+share+as+a+percent+between+1+and+100", status_code=303)
+        c.share_pct = pct
+    s.add(c); s.commit()
+    return RedirectResponse(f"/companies?msg=Saved+{c.name}", status_code=303)
+
+
+@app.post("/companies/{co_id}/lane")
+async def company_lane_rate(request: Request, co_id: int, s: Session = Depends(get_db)):
+    f = await request.form()
+    lane_id = fint(f.get("lane_id"))
+    if f.get("action") == "delete":
+        s.query(CompanyLaneRate).filter(CompanyLaneRate.company_id == co_id, CompanyLaneRate.lane_id == lane_id).delete()
+        s.commit()
+        return RedirectResponse("/companies?msg=Special+rate+removed", status_code=303)
+    pct, flat = fnum(f.get("share_pct")), fnum(f.get("flat_bbl"))
+    if not lane_id or (pct is None and flat is None):
+        return RedirectResponse("/companies?msg=Pick+a+lane+and+enter+either+a+%25+or+a+$/bbl", status_code=303)
+    r = s.query(CompanyLaneRate).filter(CompanyLaneRate.company_id == co_id, CompanyLaneRate.lane_id == lane_id).first() \
+        or CompanyLaneRate(company_id=co_id, lane_id=lane_id)
+    r.share_pct = pct if flat is None else None
+    r.flat_bbl = flat
+    r.notes = (f.get("notes") or "").strip() or None
+    s.add(r); s.commit()
+    return RedirectResponse("/companies?msg=Special+lane+rate+saved", status_code=303)
+
+
 # ---------------- Drivers ----------------
 @app.get("/drivers", response_class=HTMLResponse)
-def drivers(request: Request, show_inactive: int = 0, s: Session = Depends(get_db)):
-    qry = s.query(Driver).options(joinedload(Driver.yard))
+def drivers(request: Request, show_inactive: int = 0, company: str = "", s: Session = Depends(get_db)):
+    cos = _companies(s)
+    petrol = petrol_company(s)
+    qry = s.query(Driver).options(joinedload(Driver.yard), joinedload(Driver.company))
     if not show_inactive: qry = qry.filter(Driver.active == True)
-    rows = sorted(qry.all(), key=lambda d: ((d.yard.name if d.yard else ""), d.name))
+    rows = qry.all()
+    if company == "petrol": rows = [d for d in rows if not d.is_sub]
+    elif company == "subs": rows = [d for d in rows if d.is_sub]
+    elif company.isdigit(): rows = [d for d in rows if d.company_id == int(company)]
+    rows.sort(key=lambda d: (d.is_sub, (d.company.name if d.company else ""), (d.yard.name if d.yard else ""), d.name))
     st = settings_dict(s)
-    return render(request, "drivers.html", rows=rows, show_inactive=show_inactive, st=st, has_samsara=bool(samsara.token()),
-                  inactive_count=s.query(Driver).filter(Driver.active == False).count())
+    return render(request, "drivers.html", rows=rows, show_inactive=show_inactive, company=company, cos=cos, petrol=petrol, st=st,
+                  has_samsara=bool(samsara.token()), inactive_count=s.query(Driver).filter(Driver.active == False).count(),
+                  no_yard=sum(1 for d in rows if not d.yard and d.active))
+
+
+@app.post("/drivers/import")
+def drivers_import(s: Session = Depends(get_db)):
+    return RedirectResponse(f"/drivers?show_inactive=1&msg={import_drivers(s)}+Set+each+new+driver's+home+yard.", status_code=303)
 
 
 @app.post("/drivers/{drv_id}/toggle")
@@ -499,7 +576,7 @@ def day_samsara(plan_date: str, s: Session = Depends(get_db)):
 def _driver_form(request, s, drv):
     yards = s.query(Location).filter(Location.kind == "yard", Location.active == True).order_by(Location.name).all()
     st = settings_dict(s)
-    return render(request, "driver_form.html", drv=drv, yards=yards, days=DAYS, st=st,
+    return render(request, "driver_form.html", drv=drv, yards=yards, days=DAYS, st=st, cos=_companies(s), petrol=petrol_company(s),
                   days_off=set((drv.days_off or "").split(",")) if drv else set())
 
 
@@ -519,6 +596,7 @@ async def driver_save(request: Request, s: Session = Depends(get_db)):
     d = s.get(Driver, int(f["id"])) if f.get("id") else Driver()
     d.name = f["name"].strip()
     d.yard_id = fint(f.get("yard_id"))
+    d.company_id = fint(f.get("company_id")) or petrol_company(s).id
     d.active = bool(f.get("active"))
     d.truck = (f.get("truck") or "").strip() or None
     d.usual_shift = f.get("usual_shift") or None
@@ -529,8 +607,8 @@ async def driver_save(request: Request, s: Session = Depends(get_db)):
     s.add(d); s.commit()
     s.refresh(d)
     yard = s.get(Location, d.yard_id).name if d.yard_id else "NO YARD"
-    print(f"driver saved: id={d.id} name={d.name} yard={yard} shift={d.usual_shift} truck={d.truck} days_off={d.days_off} active={d.active}")
-    return RedirectResponse(f"/drivers?msg=Saved+{d.name}:+yard+{yard},+shift+{d.usual_shift or '-'},+truck+{d.truck or '-'},+days+off+{d.days_off or 'none'}", status_code=303)
+    co = s.get(Company, d.company_id)
+    return RedirectResponse(f"/drivers?msg=Saved+{d.name}:+{co.name if co else 'Petrol'},+yard+{yard},+shift+{d.usual_shift or '-'},+truck+{d.truck or '-'},+days+off+{d.days_off or 'none'}", status_code=303)
 
 
 # ---------------- Daily plan: drivers available + loads called in ----------------
@@ -574,16 +652,17 @@ def annotate_legs(s: Session, plan: dict):
 def _day_ctx(s: Session, plan_date: str):
     added = apply_standing_orders(s, plan_date)
     m = money_ctx(s)
-    drivers = s.query(Driver).options(joinedload(Driver.yard)).filter(Driver.active == True).all()
-    drivers.sort(key=lambda d: ((d.yard.name if d.yard else ""), d.name))
+    drivers = s.query(Driver).options(joinedload(Driver.yard), joinedload(Driver.company)).filter(Driver.active == True).all()
+    drivers.sort(key=lambda d: (d.is_sub, (d.company.name if d.company else ""), (d.yard.name if d.yard else ""), d.name))
     dd = {x.driver_id: x for x in s.query(DriverDay).filter(DriverDay.plan_date == plan_date).all()}
     weekday = DAYS[datetime.strptime(plan_date, "%Y-%m-%d").weekday()]
     drv_rows = []
     for d in drivers:
         x = dd.get(d.id)
         off_today = weekday in (d.days_off or "").split(",")
+        call = d.is_sub and not d.company.has_samsara          # no Samsara: dispatch phones the sub for hours
         drv_rows.append(dict(d=d, x=x, available=(x.available if x else not off_today), shift=(x.shift if x else (d.usual_shift or "AM")),
-                             off_today=off_today))
+                             off_today=off_today, call=call, phone=(d.company.dispatch_phone if call else None)))
     loads = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup),
                                          joinedload(LoadRequest.lane).joinedload(Lane.dropoff)) \
         .filter(LoadRequest.plan_date == plan_date, LoadRequest.status != "cancelled").all()

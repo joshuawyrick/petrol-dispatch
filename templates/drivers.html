@@ -3,22 +3,35 @@
 {% block content %}
 <h1>Drivers</h1>
 <form class="bar" method="get" action="/drivers">
+  <select name="company" onchange="this.form.submit()">
+    <option value="" {% if not company %}selected{% endif %}>All companies</option>
+    <option value="petrol" {% if company == 'petrol' %}selected{% endif %}>Petrol Transport only</option>
+    <option value="subs" {% if company == 'subs' %}selected{% endif %}>All sub-haulers</option>
+    {% for c in cos if not c.is_petrol %}<option value="{{ c.id }}" {% if company == c.id|string %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+  </select>
   <label><input type="checkbox" name="show_inactive" value="1" {% if show_inactive %}checked{% endif %} onchange="this.form.submit()"> show inactive{% if inactive_count is defined and inactive_count %} ({{ inactive_count }}){% endif %}</label>
   <a class="btn" href="/drivers/new">+ Add driver</a>
-  </form>
-  <form class="bar" method="post" action="/drivers/samsara" style="display:inline">
-  <button type="submit" class="secondary" {% if not has_samsara %}disabled title="Add SAMSARA_API_TOKEN under Environment in Render"{% endif %}>Sync drivers from Samsara</button>
-  <span class="muted">{{ rows|length }} shown · defaults: {{ st.max_drive_hours }} drive / {{ st.max_duty_hours }} on-duty hours</span>
+  <a class="btn secondary" href="/companies">Companies &amp; sub-hauler pay</a>
 </form>
+<div class="bar">
+  <form method="post" action="/drivers/samsara" style="display:inline">
+    <button type="submit" class="secondary" {% if not has_samsara %}disabled title="Add SAMSARA_API_TOKEN under Environment in Render"{% endif %}>Sync drivers from Samsara</button>
+  </form>
+  <form method="post" action="/drivers/import" style="display:inline" onsubmit="return confirm('Add the drivers from the driver spreadsheet (43 drivers with company and truck)? Drivers already here are kept and just get their company and truck filled in.')">
+    <button type="submit" class="secondary">Import drivers from spreadsheet</button>
+  </form>
+  <span class="muted">{{ rows|length }} shown{% if no_yard %} · <span class="pri-must">{{ no_yard }} need a home yard</span>{% endif %} · defaults: {{ st.max_drive_hours }} drive / {{ st.max_duty_hours }} on-duty hours</span>
+</div>
 <div class="wrap"><table>
-<tr><th>Active</th><th>Name</th><th>Home yard</th><th>Truck</th><th>Samsara</th><th>Usual shift</th><th class="num">Max drive</th><th class="num">Max on-duty</th><th>Days off</th><th>Notes</th></tr>
+<tr><th>Active</th><th>Name</th><th>Company</th><th>Home yard</th><th>Truck</th><th>Samsara</th><th>Usual shift</th><th class="num">Max drive</th><th class="num">Max on-duty</th><th>Days off</th><th>Notes</th></tr>
 {% for d in rows %}
 <tr {% if not d.active %}class="bad"{% endif %}>
   <td><form method="post" action="/drivers/{{ d.id }}/toggle"><button type="submit" class="small {% if d.active %}secondary{% endif %}" title="Click to switch">{{ 'Active' if d.active else 'Inactive' }}</button></form></td>
-  <td><a href="/drivers/{{ d.id }}">{{ d.name }}</a>{% if not d.yard %} <span class="pill" style="background:#fde8e8">needs yard</span>{% endif %}</td>
+  <td><a href="/drivers/{{ d.id }}">{{ d.name }}</a>{% if not d.yard and d.active %} <span class="pill review">set yard</span>{% endif %}</td>
+  <td>{% if d.is_sub %}<span class="pill sub">{{ d.company_short }}</span> <span class="muted th-sub">keeps {{ d.company.share_pct|int }}%</span>{% else %}<span class="muted">Petrol</span>{% endif %}</td>
   <td>{{ d.yard.name if d.yard else '—' }}</td>
   <td>{{ d.truck or '' }}</td>
-  <td class="muted">{% if d.samsara_id %}linked{% if d.samsara_vehicle %} · {{ d.samsara_vehicle }}{% endif %}{% endif %}</td>
+  <td class="muted">{% if d.samsara_id %}linked{% if d.samsara_vehicle %} · {{ d.samsara_vehicle }}{% endif %}{% elif d.is_sub and not d.company.has_samsara %}<span class="th-sub">call for hours</span>{% endif %}</td>
   <td>{{ d.usual_shift or '' }}</td>
   <td class="num">{{ d.max_drive_hours or st.max_drive_hours }}</td>
   <td class="num">{{ d.max_duty_hours or st.max_duty_hours }}</td>
@@ -26,7 +39,7 @@
   <td class="muted">{{ d.notes or '' }}</td>
 </tr>
 {% endfor %}
-{% if not rows %}<tr><td colspan="10" class="muted">No drivers yet. Click "+ Add driver" or "Sync drivers from Samsara".</td></tr>{% endif %}
+{% if not rows %}<tr><td colspan="11" class="muted">No drivers here yet. Click "Import drivers from spreadsheet", "Sync drivers from Samsara", or "+ Add driver".</td></tr>{% endif %}
 </table></div>
-<p class="muted"><b>Active</b> drivers show up on the Daily Plan page and can be planned; <b>inactive</b> ones are ignored completely (use it for drivers on leave, terminated, or seasonal). Click the button to switch. Syncing from Samsara never changes this flag.<br>Two drivers with the same truck number share that truck: the second can't leave the yard until the first is back. Daily availability and remaining hours are entered on the Daily Plan page.</p>
+<p class="muted"><b>Active</b> drivers show up on the Daily Plan page and can be planned; <b>inactive</b> ones are ignored completely (use it for drivers on leave, terminated, or seasonal). Click the button to switch. Syncing from Samsara never changes this flag.<br>A driver without a home yard is left out of planning until you set one (open the driver). Two drivers at the same company with the same truck number share that truck: the second can't leave the yard until the first is back. Daily availability and remaining hours are entered on the Daily Plan page.</p>
 {% endblock %}
