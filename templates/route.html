@@ -33,6 +33,7 @@
       <div class="daybar-label">Route shown on the map</div>
       <div class="route-big"><span id="miles">–</span> mi <span class="muted">·</span> <span id="mins">–</span> min</div>
       <div class="muted" id="viacount">Drag the blue line onto the road you want. It snaps like Google Maps.</div>
+      <div class="muted small" style="margin-top:4px">Map / Satellite / Terrain buttons are at the top right of the map. Satellite with road labels is the default; the map remembers your choice.</div>
       <div class="muted small" style="margin-top:6px">Engine time at {{ speed }} mph: <span id="engmins">–</span> min (Google's own estimate is shown for reference only)</div>
     </div>
 
@@ -78,7 +79,12 @@ const SPEED = {{ speed }};
 let map, svc, renderer, current = null;
 
 function initMap() {
-  map = new google.maps.Map(document.getElementById('map'), {zoom: 9, center: ORIGIN, mapTypeControl: false, streetViewControl: false});
+  let startType = 'hybrid';                                   // satellite + road labels by default
+  try { startType = localStorage.getItem('routeMapType') || 'hybrid'; } catch (e) {}
+  map = new google.maps.Map(document.getElementById('map'), {zoom: 9, center: ORIGIN, mapTypeId: startType, streetViewControl: false,
+    mapTypeControl: true, mapTypeControlOptions: {style: google.maps.MapTypeControlStyle.HORIZONTAL_BAR, position: google.maps.ControlPosition.TOP_RIGHT,
+    mapTypeIds: ['roadmap', 'hybrid', 'terrain']}});
+  map.addListener('maptypeid_changed', () => { try { localStorage.setItem('routeMapType', map.getMapTypeId()); } catch (e) {} });
   svc = new google.maps.DirectionsService();
   renderer = new google.maps.DirectionsRenderer({map, draggable: true, suppressMarkers: false});
   renderer.addListener('directions_changed', () => { current = renderer.getDirections(); showRoute(); });
