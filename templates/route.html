@@ -40,6 +40,7 @@
     <form method="post" action="/route/{{ o.id }}/{{ d.id }}/approve" id="approveForm" class="card">
       <input type="hidden" name="miles" id="f_miles"><input type="hidden" name="minutes" id="f_mins">
       <input type="hidden" name="via" id="f_via"><input type="hidden" name="polyline" id="f_poly"><input type="hidden" name="kind" id="f_kind" value="google-default">
+      <input type="hidden" name="steps" id="f_steps"><input type="hidden" name="rev_steps" id="f_rsteps">
       <input type="hidden" name="rev_miles" id="f_rmiles"><input type="hidden" name="rev_minutes" id="f_rmins"><input type="hidden" name="rev_via" id="f_rvia"><input type="hidden" name="rev_polyline" id="f_rpoly">
       <input type="hidden" name="back" value="{{ back or '' }}">
       <label class="chk"><input type="checkbox" name="reverse" id="revchk" value="1" checked> Also approve the reverse direction ({{ d.name[:22] }} → {{ o.name[:22] }}) using the same roads
@@ -106,7 +107,8 @@ function summarize(res) {
   const r = res.routes[0]; let meters = 0, secs = 0, via = [];
   r.legs.forEach(l => { meters += l.distance.value; secs += l.duration.value; (l.via_waypoints || []).forEach(v => via.push([+v.lat().toFixed(6), +v.lng().toFixed(6)])); });
   const poly = r.overview_polyline && (typeof r.overview_polyline === 'string' ? r.overview_polyline : r.overview_polyline.points) || google.maps.geometry.encoding.encodePath(r.overview_path);
-  return {miles: +(meters / 1609.344).toFixed(1), mins: Math.round(secs / 60), via, poly};
+  const steps = []; r.legs.forEach(l => (l.steps || []).forEach(st => steps.push({instruction: (st.instructions || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(), miles: +(st.distance.value / 1609.344).toFixed(1)})));
+  return {miles: +(meters / 1609.344).toFixed(1), mins: Math.round(secs / 60), via, poly, steps};
 }
 
 function showRoute() {
@@ -124,6 +126,7 @@ function onApprove(e) {
   const s = summarize(current);
   document.getElementById('f_miles').value = s.miles; document.getElementById('f_mins').value = s.mins;
   document.getElementById('f_via').value = JSON.stringify(s.via); document.getElementById('f_poly').value = s.poly;
+  document.getElementById('f_steps').value = JSON.stringify(s.steps);
   const form = document.getElementById('approveForm'); const btn = document.getElementById('approveBtn');
   btn.disabled = true; btn.textContent = 'Saving…';
   if (!document.getElementById('revchk').checked) { form.submit(); return false; }
@@ -131,7 +134,8 @@ function onApprove(e) {
   const rv = s.via.slice().reverse().map(p => ({location: new google.maps.LatLng(p[0], p[1]), stopover: false}));
   svc.route({origin: DEST, destination: ORIGIN, waypoints: rv, travelMode: google.maps.TravelMode.DRIVING}, (res, status) => {
     if (status === 'OK') { const r = summarize(res); document.getElementById('f_rmiles').value = r.miles; document.getElementById('f_rmins').value = r.mins;
-      document.getElementById('f_rvia').value = JSON.stringify(s.via.slice().reverse()); document.getElementById('f_rpoly').value = r.poly; }
+      document.getElementById('f_rvia').value = JSON.stringify(s.via.slice().reverse()); document.getElementById('f_rpoly').value = r.poly;
+      document.getElementById('f_rsteps').value = JSON.stringify(r.steps); }
     form.submit();
   });
   return false;

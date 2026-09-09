@@ -11,9 +11,10 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
-from db import SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, StandingOrder, init_db
+from db import SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, StandingOrder, CompanyInfo, JmpDoc, init_db
 from seed import seed
-import mileage, fsc, optimizer, samsara
+import mileage, fsc, optimizer, samsara, jmp
+from fastapi.responses import Response
 import json
 
 app = FastAPI(title="Petrol Dispatch Optimizer")
@@ -213,7 +214,10 @@ def lanes(request: Request, q: str = "", show_inactive: int = 0, s: Session = De
         ql = q.lower()
         rows = [l for l in rows if ql in (l.pickup.name + " " + l.dropoff.name + " " + (l.account or "")).lower()]
     rows.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
-    view = [dict(l=l, **lane_money(l, m["min_bbl"], m["fsc"])) for l in rows]
+    approved = {(d.origin_id, d.dest_id) for d in s.query(Distance).filter(Distance.approved == True).all()}
+    jmp_v = {}
+    for doc in s.query(JmpDoc).order_by(JmpDoc.id).all(): jmp_v[doc.lane_id] = doc.version
+    view = [dict(l=l, route_ok=(l.pickup_id, l.dropoff_id) in approved, jmp=jmp_v.get(l.id), **lane_money(l, m["min_bbl"], m["fsc"])) for l in rows]
     return render(request, "lanes.html", rows=view, q=q, show_inactive=show_inactive, fsc_pct=m["fsc"],
                   inactive_count=s.query(Lane).filter(Lane.active == False).count())
 
@@ -326,8 +330,9 @@ def _back_url(back: str, msg: str) -> str:
     return url + ("#" + frag if frag else "")
 
 
-def _approve(s, a, b, miles, minutes, kind, via, poly, note):
+def _approve(s, a, b, miles, minutes, kind, via, poly, note, steps=None):
     d = _dist_row(s, a, b)
+    if steps is not None: d.steps_json = steps or None
     d.override_miles = miles; d.override_minutes = minutes
     d.approved = True; d.approved_at = datetime.utcnow(); d.route_kind = kind
     d.via_json = via or None; d.polyline = poly or None
@@ -341,11 +346,11 @@ async def route_approve(request: Request, a: int, b: int, s: Session = Depends(g
     miles, mins = fnum(f.get("miles")), fnum(f.get("minutes"))
     if not miles:
         return RedirectResponse(f"/route/{a}/{b}?msg=No+route+to+approve+yet", status_code=303)
-    _approve(s, a, b, miles, mins, f.get("kind") or "google-default", f.get("via"), f.get("polyline"), f.get("note"))
+    _approve(s, a, b, miles, mins, f.get("kind") or "google-default", f.get("via"), f.get("polyline"), f.get("note"), f.get("steps"))
     msg = f"Approved: {miles} mi"
     if f.get("reverse") and fnum(f.get("rev_miles")):
         _approve(s, b, a, fnum(f.get("rev_miles")), fnum(f.get("rev_minutes")), f.get("kind") or "google-default",
-                 f.get("rev_via"), f.get("rev_polyline"), f.get("note"))
+                 f.get("rev_via"), f.get("rev_polyline"), f.get("note"), f.get("rev_steps"))
         msg += f" (reverse {fnum(f.get('rev_miles'))} mi)"
     s.commit()
     return RedirectResponse(_back_url(f.get("back") or f"/route/{a}/{b}", msg), status_code=303)
@@ -372,6 +377,94 @@ async def route_unapprove(request: Request, a: int, b: int, s: Session = Depends
         d.override_miles = None; d.override_minutes = None
         s.commit()
     return RedirectResponse(_back_url(f.get("back") or f"/route/{a}/{b}", "Approval+cleared"), status_code=303)
+
+
+# ---------------- Journey Management Plans ----------------
+@app.get("/lanes/{lane_id}/jmp", response_class=HTMLResponse)
+def lane_jmp(request: Request, lane_id: int, s: Session = Depends(get_db)):
+    lane = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).get(lane_id)
+    d = jmp.leg(s, lane.pickup_id, lane.dropoff_id)
+    yards = s.query(Location).filter(Location.kind == "yard", Location.active == True).order_by(Location.name).all()
+    yard_legs = {y.id: jmp.leg(s, y.id, lane.pickup_id) for y in yards}
+    docs = s.query(JmpDoc).filter_by(lane_id=lane_id).order_by(JmpDoc.id.desc()).all()
+    hazards = jmp.hazards_of(lane)
+    while len(hazards) < 6: hazards.append({})
+    return render(request, "lane_jmp.html", lane=lane, d=d, yards=yards, yard_legs=yard_legs, docs=docs, hazards=hazards,
+                  company=jmp.company(s))
+
+
+@app.post("/lanes/{lane_id}/jmp/save")
+async def lane_jmp_save(request: Request, lane_id: int, s: Session = Depends(get_db)):
+    f = await request.form()
+    lane = s.get(Lane, lane_id)
+    hz = []
+    for i in range(12):
+        h = (f.get(f"h_{i}") or "").strip()
+        if h: hz.append(dict(hazard=h, location=(f.get(f"l_{i}") or "").strip(), control=(f.get(f"c_{i}") or "").strip()))
+    lane.jmp_hazards = json.dumps(hz) if hz else None
+    lane.jmp_rest_stop = (f.get("rest_stop") or "").strip() or None
+    lane.jmp_notes = (f.get("jmp_notes") or "").strip() or None
+    lane.product = (f.get("product") or "").strip() or None
+    s.commit()
+    return RedirectResponse(f"/lanes/{lane_id}/jmp?msg=Saved", status_code=303)
+
+
+@app.post("/lanes/{lane_id}/jmp/generate")
+async def lane_jmp_generate(request: Request, lane_id: int, s: Session = Depends(get_db)):
+    f = await request.form()
+    lane = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).get(lane_id)
+    yard = s.get(Location, int(f["yard_id"])) if f.get("yard_id") else None
+    try:
+        pdf, summary = jmp.build_pdf(s, lane, yard, mileage.get_api_key())
+    except Exception as e:
+        return RedirectResponse(f"/lanes/{lane_id}/jmp?msg=Could+not+build+the+PDF:+{type(e).__name__}+{str(e)[:120]}", status_code=303)
+    doc = JmpDoc(lane_id=lane_id, version=s.query(JmpDoc).filter_by(lane_id=lane_id).count() + 1,
+                 include_yard_id=yard.id if yard else None, summary=summary, pdf=pdf)
+    s.add(doc); s.commit()
+    return RedirectResponse(f"/lanes/{lane_id}/jmp?msg=JMP+{summary}+generated", status_code=303)
+
+
+@app.get("/jmp/{doc_id}.pdf")
+def jmp_pdf(doc_id: int, download: int = 0, s: Session = Depends(get_db)):
+    doc = s.query(JmpDoc).options(joinedload(JmpDoc.lane).joinedload(Lane.pickup), joinedload(JmpDoc.lane).joinedload(Lane.dropoff)).get(doc_id)
+    if not doc: return RedirectResponse("/lanes?msg=JMP+not+found", status_code=303)
+    safe = lambda x: "".join(ch if ch.isalnum() else "_" for ch in x)[:40]
+    fname = f"JMP_v{doc.version}_{safe(doc.lane.pickup.name)}_to_{safe(doc.lane.dropoff.name)}.pdf"
+    disp = ("attachment" if download else "inline") + f'; filename="{fname}"'
+    return Response(content=doc.pdf, media_type="application/pdf", headers={"Content-Disposition": disp})
+
+
+@app.post("/jmp/{doc_id}/delete")
+def jmp_delete(doc_id: int, s: Session = Depends(get_db)):
+    doc = s.get(JmpDoc, doc_id); lane_id = doc.lane_id if doc else None
+    if doc: s.delete(doc); s.commit()
+    return RedirectResponse(f"/lanes/{lane_id}/jmp?msg=Deleted" if lane_id else "/lanes", status_code=303)
+
+
+@app.get("/jmps", response_class=HTMLResponse)
+def jmp_list(request: Request, s: Session = Depends(get_db)):
+    docs = s.query(JmpDoc).options(joinedload(JmpDoc.lane).joinedload(Lane.pickup), joinedload(JmpDoc.lane).joinedload(Lane.dropoff)).order_by(JmpDoc.id.desc()).all()
+    latest = {}
+    for d in docs: latest.setdefault(d.lane_id, d)
+    lanes_all = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).filter(Lane.active == True).all()
+    lanes_all.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
+    return render(request, "jmps.html", latest=latest, lanes_all=lanes_all, company=jmp.company(s))
+
+
+@app.get("/company", response_class=HTMLResponse)
+def company_page(request: Request, s: Session = Depends(get_db)):
+    return render(request, "company.html", c=jmp.company(s))
+
+
+@app.post("/company")
+async def company_save(request: Request, s: Session = Depends(get_db)):
+    f = await request.form(); c = jmp.company(s)
+    for k in ["name", "address", "dispatch_phone", "emergency_phone", "safety_contact", "safety_phone", "spill_response",
+              "checkin_rule", "overdue_rule", "prepared_by_title", "approved_by_title"]:
+        setattr(c, k, (f.get(k) or "").strip() or None)
+    c.require_manager_signature = bool(f.get("require_manager_signature"))
+    s.commit()
+    return RedirectResponse("/company?msg=Company+details+saved", status_code=303)
 
 
 # ---------------- Drivers ----------------

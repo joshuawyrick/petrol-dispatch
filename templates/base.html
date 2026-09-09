@@ -17,7 +17,8 @@
     <a href="/standing" {% if request.url.path.startswith('/standing') %}class="on"{% endif %}>Standing Orders</a>
     <a href="/drivers" {% if request.url.path.startswith('/drivers') %}class="on"{% endif %}>Drivers</a>
     <a href="/mileage" {% if request.url.path.startswith('/mileage') %}class="on"{% endif %}>Mileage</a>
-    <a href="/settings" {% if request.url.path.startswith('/settings') %}class="on"{% endif %}>Settings</a>
+    <a href="/jmps" {% if request.url.path.startswith('/jmps') %}class="on"{% endif %}>JMPs</a>
+    <a href="/settings" {% if request.url.path.startswith('/settings') or request.url.path.startswith('/company') %}class="on"{% endif %}>Settings</a>
   </nav>
   <span class="spacer"></span>
   {% if not no_pw %}<a class="logout" href="/logout">Log out</a>{% endif %}

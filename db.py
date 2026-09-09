@@ -5,7 +5,7 @@ Uses PostgreSQL when DATABASE_URL is set (Replit's built-in database), otherwise
 import os
 from datetime import datetime
 from sqlalchemy import (create_engine, Column, Integer, Float, String, Boolean, DateTime, ForeignKey,
-                        UniqueConstraint, Text)
+                        UniqueConstraint, Text, LargeBinary)
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 DB_URL = os.environ.get("DATABASE_URL", "sqlite:///data/dispatch.db")
@@ -69,6 +69,10 @@ class Lane(Base):
     driver_pay = Column(Float)                         # driver $/bbl
     active = Column(Boolean, default=True)
     notes = Column(Text)
+    product = Column(String(60))                       # e.g. crude oil, naphtha (shown on the JMP)
+    jmp_hazards = Column(Text)                         # JSON list of {hazard, location, control}
+    jmp_rest_stop = Column(String(200))
+    jmp_notes = Column(Text)
     pickup = relationship("Location", foreign_keys=[pickup_id])
     dropoff = relationship("Location", foreign_keys=[dropoff_id])
 
@@ -92,6 +96,7 @@ class Distance(Base):
     route_kind = Column(String(20))                    # google-default | custom (dragged) | manual-miles
     via_json = Column(Text)                            # JSON list of [lat, lng] via points from dragging
     polyline = Column(Text)                            # encoded overview polyline of the approved route
+    steps_json = Column(Text)                          # JSON list of {instruction, miles} turn-by-turn along the approved route
     origin = relationship("Location", foreign_keys=[origin_id])
     dest = relationship("Location", foreign_keys=[dest_id])
 
@@ -170,6 +175,37 @@ class StandingOrder(Base):
     end_date = Column(String(10))                      # blank = until switched off
     active = Column(Boolean, default=True)
     notes = Column(String(200))
+    lane = relationship("Lane")
+
+
+class CompanyInfo(Base):
+    """One row: the fixed company details printed on every Journey Management Plan."""
+    __tablename__ = "company_info"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), default="Petrol Transport, Inc.")
+    address = Column(String(200))
+    dispatch_phone = Column(String(60))
+    emergency_phone = Column(String(60))
+    safety_contact = Column(String(120))
+    safety_phone = Column(String(60))
+    spill_response = Column(String(200))
+    checkin_rule = Column(String(300))
+    overdue_rule = Column(String(300))
+    prepared_by_title = Column(String(80), default="Dispatcher")
+    approved_by_title = Column(String(80), default="Operations Manager")
+    require_manager_signature = Column(Boolean, default=True)
+
+
+class JmpDoc(Base):
+    """A generated Journey Management Plan PDF for a lane (one row per version)."""
+    __tablename__ = "jmp_docs"
+    id = Column(Integer, primary_key=True)
+    lane_id = Column(Integer, ForeignKey("lanes.id"), nullable=False)
+    version = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    include_yard_id = Column(Integer, ForeignKey("locations.id"))
+    summary = Column(String(200))
+    pdf = Column(LargeBinary)
     lane = relationship("Lane")
 
 

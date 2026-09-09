@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Journey Management Plans{% endblock %}
+{% block content %}
+<h1>Journey Management Plans</h1>
+<p class="muted">One plan per lane, generated from the approved route. <a href="/company">Company details</a> (address, phones, signature titles) print on every plan.</p>
+<div class="wrap"><table>
+<tr><th>Lane</th><th>Account</th><th>Current JMP</th><th>Generated</th><th></th></tr>
+{% for l in lanes_all %}{% set doc = latest.get(l.id) %}
+<tr>
+  <td>{{ l.pickup.name }} → {{ l.dropoff.name }}</td>
+  <td class="muted">{{ l.account or '' }}</td>
+  <td>{% if doc %}<span class="pill approved">v{{ doc.version }}</span>{% else %}<span class="pill review">none</span>{% endif %}</td>
+  <td class="muted">{{ doc.created_at.strftime('%m/%d/%Y') if doc else '' }}</td>
+  <td style="white-space:nowrap">{% if doc %}<a class="btn secondary small" href="/jmp/{{ doc.id }}.pdf" target="_blank">View</a> <a class="btn secondary small" href="/jmp/{{ doc.id }}.pdf?download=1">Download</a> {% endif %}<a class="btn small" href="/lanes/{{ l.id }}/jmp">{{ 'Open' if doc else 'Create' }}</a></td>
+</tr>
+{% endfor %}
+</table></div>
+{% endblock %}

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}JMP {{ lane.pickup.name }} → {{ lane.dropoff.name }}{% endblock %}
+{% block content %}
+<div class="route-head">
+  <div>
+    <div class="daybar-label">Journey Management Plan</div>
+    <h1 style="margin:2px 0 0">{{ lane.pickup.name }} <span class="muted">→</span> {{ lane.dropoff.name }}</h1>
+    <div class="muted">{{ lane.account or '' }}{% if lane.operator %} · operator {{ lane.operator }}{% endif %} · <a href="/lanes?q={{ lane.pickup.name|urlencode }}">back to lanes</a> · <a href="/jmps">all JMPs</a></div>
+  </div>
+  <div class="route-status">
+    {% if d and d.approved %}<span class="pill approved">ROUTE APPROVED {{ d.approved_at.strftime('%m/%d/%Y') if d.approved_at else '' }}</span><div class="muted">{{ '%.1f'|format(d.miles) }} mi</div>
+    {% else %}<span class="pill review">ROUTE NOT APPROVED</span><div class="muted"><a href="/route/{{ lane.pickup_id }}/{{ lane.dropoff_id }}?back={{ ('/lanes/' ~ lane.id ~ '/jmp')|urlencode }}">Approve the route first</a> so the plan shows the roads you actually want.</div>{% endif %}
+  </div>
+</div>
+
+<div class="grid2">
+  <section class="panel">
+    <div class="panel-head"><h2>1 · Lane details for the plan</h2></div>
+    <form method="post" action="/lanes/{{ lane.id }}/jmp/save">
+      <div class="form" style="max-width:none;border:0;padding:0">
+        <div class="row"><label>Product</label><input type="text" name="product" value="{{ lane.product or '' }}" placeholder="Crude oil (default)"></div>
+        <div class="row"><label>Planned rest stop</label><input type="text" name="rest_stop" value="{{ lane.jmp_rest_stop or '' }}" placeholder="only needed if driving exceeds 4.5 h"></div>
+        <div class="row"><label>Lane notes</label><textarea name="jmp_notes" placeholder="anything a driver new to this lane should know">{{ lane.jmp_notes or '' }}</textarea></div>
+      </div>
+      <h3 style="margin:10px 0 4px">Route hazards and controls</h3>
+      <div class="muted small" style="margin-bottom:6px">Specific to this lane. Standard tanker hazards (surge, lease roads, rail crossings, visibility, cell coverage) are added to every plan automatically.</div>
+      <div class="wrap"><table>
+      <tr><th>Hazard</th><th>Where</th><th>Control / driver action</th></tr>
+      {% for h in hazards %}
+      <tr><td><input type="text" name="h_{{ loop.index0 }}" value="{{ h.hazard or '' }}" style="min-width:150px"></td>
+          <td><input type="text" name="l_{{ loop.index0 }}" value="{{ h.location or '' }}" style="min-width:120px"></td>
+          <td><input type="text" name="c_{{ loop.index0 }}" value="{{ h.control or '' }}" style="min-width:220px"></td></tr>
+      {% endfor %}
+      </table></div>
+      <p><button type="submit" class="secondary">Save lane details</button></p>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>2 · Generate the plan</h2></div>
+    <form method="post" action="/lanes/{{ lane.id }}/jmp/generate" class="form" style="max-width:none;border:0;padding:0">
+      <div class="row"><label>Include yard → pickup leg</label>
+        <select name="yard_id"><option value="">No — pickup to drop-off only (usual)</option>
+          {% for y in yards %}<option value="{{ y.id }}">Yes — from {{ y.name }}{% if yard_legs[y.id] and yard_legs[y.id].approved %} (route approved){% elif yard_legs[y.id] %} (route not approved){% else %} (no mileage yet){% endif %}</option>{% endfor %}
+        </select></div>
+      <div class="hint">Header details (company, phones, signature titles) come from the <a href="/company">Company</a> page.</div>
+      <p><button type="submit" {% if not d %}disabled title="No mileage for this lane yet"{% endif %}>Generate JMP PDF</button>
+         <span class="muted">Each generation makes a new version; older versions stay available below.</span></p>
+    </form>
+
+    <h3 style="margin:14px 0 6px">Versions</h3>
+    {% if docs %}
+    <div class="wrap"><table>
+    <tr><th>Version</th><th>Created</th><th>Covers</th><th></th></tr>
+    {% for doc in docs %}
+    <tr><td><b>v{{ doc.version }}</b>{% if loop.first %} <span class="pill approved">current</span>{% endif %}</td>
+        <td>{{ doc.created_at.strftime('%m/%d/%Y %H:%M') }}</td><td class="muted">{{ doc.summary }}</td>
+        <td style="white-space:nowrap"><a class="btn secondary small" href="/jmp/{{ doc.id }}.pdf" target="_blank">View</a> <a class="btn secondary small" href="/jmp/{{ doc.id }}.pdf?download=1">Download</a>
+            <form method="post" action="/jmp/{{ doc.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this version?')"><button type="submit" class="small secondary">✕</button></form></td></tr>
+    {% endfor %}
+    </table></div>
+    {% else %}<p class="muted">No plan generated for this lane yet.</p>{% endif %}
+  </section>
+</div>
+{% endblock %}
