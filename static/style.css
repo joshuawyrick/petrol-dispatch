@@ -83,6 +83,10 @@ table.loads td, table.drivers td { vertical-align:middle; }
 /* ---- route approval ---- */
 .pill.approved { background:#dff3e4; color:#1a7f37; text-decoration:none; } .pill.review { background:#fff1c2; color:#8a6100; text-decoration:none; }
 .pill.sub { background:#e6dcff; color:#4b2a9b; font-weight:600; margin-right:4px; }
+.pill.gauge { background:#d9f0ff; color:#0b5394; font-weight:600; margin-right:4px; }
+.gaugebar { margin-top:4px; display:flex; gap:6px; flex-wrap:wrap; } .gaugebar select { font-size:12px; padding:2px 4px; }
+.gaugebar select.gauge-on { border-color:#0b5394; background:#eef7ff; }
+tr.stop-gauge td { background:#eef7ff; }
 a.pill:hover { filter:brightness(.95); }
 .route-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; margin-bottom:12px; }
 .route-status { text-align:right; }

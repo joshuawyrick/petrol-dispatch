@@ -27,7 +27,7 @@
 {% for d in rows %}
 <tr {% if not d.active %}class="bad"{% endif %}>
   <td><form method="post" action="/drivers/{{ d.id }}/toggle"><button type="submit" class="small {% if d.active %}secondary{% endif %}" title="Click to switch">{{ 'Active' if d.active else 'Inactive' }}</button></form></td>
-  <td><a href="/drivers/{{ d.id }}">{{ d.name }}</a>{% if not d.yard and d.active %} <span class="pill review">set yard</span>{% endif %}</td>
+  <td><a href="/drivers/{{ d.id }}">{{ d.name }}</a>{% if d.can_gauge %} <span class="pill gauge" title="can gauge tanks">gauger</span>{% endif %}{% if not d.yard and d.active %} <span class="pill review">set yard</span>{% endif %}</td>
   <td>{% if d.is_sub %}<span class="pill sub">{{ d.company_short }}</span> <span class="muted th-sub">keeps {{ d.company.share_pct|int }}%</span>{% else %}<span class="muted">Petrol</span>{% endif %}</td>
   <td>{{ d.yard.name if d.yard else '—' }}</td>
   <td>{{ d.truck or '' }}</td>

@@ -48,11 +48,36 @@ class Location(Base):
     open_time = Column(String(5))                      # "06:00"  earliest a truck can start loading/offloading here
     close_time = Column(String(5))                     # "18:00"  latest a truck can start loading/offloading here
     max_trucks_at_once = Column(Integer)               # None = no limit
+    requires_gauging = Column(Boolean, default=False)  # first load from each tank each day must be gauged (API gravity, BS&W)
     notes = Column(Text)
 
     def billable_bbl(self, min_bbl: float) -> float:
         base = self.avg_bbl_override if self.avg_bbl_override else self.avg_bbl_history
         return max(min_bbl, base) if base else min_bbl
+
+
+class Tank(Base):
+    """A tank at a location (pickup sites with several tanks; drop-offs can have them too). Loads can name the tank."""
+    __tablename__ = "tanks"
+    __table_args__ = (UniqueConstraint("location_id", "name", name="uq_tank"),)
+    id = Column(Integer, primary_key=True)
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
+    name = Column(String(60), nullable=False)          # "Tank 1", "T-204"
+    active = Column(Boolean, default=True)
+    notes = Column(String(200))
+    location = relationship("Location")
+
+
+class LocationRestriction(Base):
+    """A driver or a truck that cannot go to this location (too tall/long for the site, no site training, etc.)."""
+    __tablename__ = "location_restrictions"
+    id = Column(Integer, primary_key=True)
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
+    driver_id = Column(Integer, ForeignKey("drivers.id"))      # one of driver_id / truck is set
+    truck = Column(String(40))                                 # truck number, matched case-insensitively
+    reason = Column(String(200))
+    location = relationship("Location")
+    driver = relationship("Driver")
 
 
 class Lane(Base):
@@ -119,6 +144,8 @@ class Company(Base):
     share_pct = Column(Float)                          # sub-hauler's share of load pay, in percent (75 = sub keeps 75%)
     dispatch_phone = Column(String(60))
     has_samsara = Column(Boolean, default=False)       # if false, dispatch calls the sub for hours; Samsara pull skips them
+    priority = Column(Integer, default=2)              # 1 = fill first (Petrol + Petrol-owned subs), 2 = next, 3 = last
+    petrol_owned = Column(Boolean, default=False)      # sub Petrol owns: engine treats it like our own truck (fuel + lane driver pay)
     active = Column(Boolean, default=True)
     notes = Column(Text)
 
@@ -156,6 +183,7 @@ class Driver(Base):
     usual_shift = Column(String(2))                    # "AM" | "PM" | blank
     samsara_id = Column(String(40))                    # Samsara driver id when synced
     samsara_vehicle = Column(String(80))               # vehicle name Samsara reports for this driver
+    can_gauge = Column(Boolean, default=False)         # trained/equipped to gauge a tank (sample, API gravity, BS&W)
     notes = Column(Text)
     yard = relationship("Location", foreign_keys=[yard_id])
     company = relationship("Company")
@@ -201,11 +229,14 @@ class LoadRequest(Base):
     earliest_pickup = Column(String(5))                # optional time window for this load only
     latest_pickup = Column(String(5))
     bbl_override = Column(Float)                       # known barrels for this specific load
+    tank_id = Column(Integer, ForeignKey("tanks.id"))  # which tank at the pickup (optional; matters for gauging)
+    gauge = Column(String(12))                         # none | haul (gauger hauls the first load) | only (gauger just gauges first)
     status = Column(String(12), default="open")        # open | planned | hauled | cancelled
     standing_order_id = Column(Integer, ForeignKey("standing_orders.id"))   # set when auto-created from a standing order
     notes = Column(String(200))
     created_at = Column(DateTime, default=datetime.utcnow)
     lane = relationship("Lane")
+    tank = relationship("Tank")
 
 
 class StandingOrder(Base):
@@ -221,8 +252,10 @@ class StandingOrder(Base):
     start_date = Column(String(10))                    # blank = already running
     end_date = Column(String(10))                      # blank = until switched off
     active = Column(Boolean, default=True)
+    tank_id = Column(Integer, ForeignKey("tanks.id"))
     notes = Column(String(200))
     lane = relationship("Lane")
+    tank = relationship("Tank")
 
 
 class CompanyInfo(Base):

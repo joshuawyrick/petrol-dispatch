@@ -2,7 +2,7 @@
 
 Phase 1: master data, settings, mileage cache.   Phase 2: login, fuel surcharge + EIA price, drivers, daily load board.
 """
-import os, hashlib
+import os, hashlib, re
 from datetime import date, datetime, timedelta
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -12,7 +12,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 from db import (SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, StandingOrder, CompanyInfo, JmpDoc,
-                Company, CompanyLaneRate, init_db)
+                Company, CompanyLaneRate, Tank, LocationRestriction, init_db)
 from seed import seed, ensure_companies, import_drivers, petrol_company
 import mileage, fsc, optimizer, samsara, jmp
 from fastapi.responses import Response
@@ -183,7 +183,11 @@ def location_edit(request: Request, loc_id: int, s: Session = Depends(get_db)):
     loc = s.get(Location, loc_id)
     lanes = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).filter(
         or_(Lane.pickup_id == loc_id, Lane.dropoff_id == loc_id)).all()
-    return render(request, "location_form.html", loc=loc, kinds=KINDS, lanes=lanes)
+    tanks = s.query(Tank).filter(Tank.location_id == loc_id).order_by(Tank.name).all()
+    restr = s.query(LocationRestriction).options(joinedload(LocationRestriction.driver)).filter(LocationRestriction.location_id == loc_id).all()
+    drivers = sorted(s.query(Driver).options(joinedload(Driver.company)).filter(Driver.active == True).all(), key=lambda d: d.name)
+    trucks = sorted({(d.truck or "").strip().upper() for d in drivers if d.truck})
+    return render(request, "location_form.html", loc=loc, kinds=KINDS, lanes=lanes, tanks=tanks, restr=restr, drivers=drivers, trucks=trucks)
 
 
 @app.post("/locations/save")
@@ -199,9 +203,42 @@ async def location_save(request: Request, s: Session = Depends(get_db)):
     loc.open_time = f.get("open_time") or None
     loc.close_time = f.get("close_time") or None
     loc.max_trucks_at_once = fint(f.get("max_trucks_at_once"))
+    loc.requires_gauging = bool(f.get("requires_gauging"))
     loc.notes = f.get("notes") or None
     s.add(loc); s.commit()
     return RedirectResponse(f"/locations/{loc.id}?msg=Saved", status_code=303)
+
+
+@app.post("/locations/{loc_id}/tank")
+async def location_tank(request: Request, loc_id: int, s: Session = Depends(get_db)):
+    f = await request.form()
+    if f.get("action") == "delete":
+        tk = s.get(Tank, int(f["tank_id"]))
+        if tk:
+            in_use = s.query(LoadRequest).filter(LoadRequest.tank_id == tk.id).count() + s.query(StandingOrder).filter(StandingOrder.tank_id == tk.id).count()
+            if in_use: tk.active = False
+            else: s.delete(tk)
+            s.commit()
+        return RedirectResponse(f"/locations/{loc_id}?msg=Tank+removed#tanks", status_code=303)
+    name = (f.get("name") or "").strip()
+    if not name: return RedirectResponse(f"/locations/{loc_id}?msg=Type+a+tank+name#tanks", status_code=303)
+    if not s.query(Tank).filter(Tank.location_id == loc_id, Tank.name == name).first():
+        s.add(Tank(location_id=loc_id, name=name, notes=(f.get("notes") or "").strip() or None)); s.commit()
+    return RedirectResponse(f"/locations/{loc_id}?msg=Tank+{name}+added#tanks", status_code=303)
+
+
+@app.post("/locations/{loc_id}/restriction")
+async def location_restriction(request: Request, loc_id: int, s: Session = Depends(get_db)):
+    f = await request.form()
+    if f.get("action") == "delete":
+        r = s.get(LocationRestriction, int(f["rid"]))
+        if r: s.delete(r); s.commit()
+        return RedirectResponse(f"/locations/{loc_id}?msg=Restriction+removed#restrictions", status_code=303)
+    drv_id, truck = fint(f.get("driver_id")), (f.get("truck") or "").strip().upper() or None
+    if not drv_id and not truck:
+        return RedirectResponse(f"/locations/{loc_id}?msg=Pick+a+driver+or+a+truck#restrictions", status_code=303)
+    s.add(LocationRestriction(location_id=loc_id, driver_id=drv_id, truck=truck, reason=(f.get("reason") or "").strip() or None)); s.commit()
+    return RedirectResponse(f"/locations/{loc_id}?msg=Restriction+added#restrictions", status_code=303)
 
 
 # ---------------- Lanes ----------------
@@ -320,15 +357,39 @@ def route_page(request: Request, a: int, b: int, back: str = "", s: Session = De
     dist = _dist_row(s, a, b, create=False)
     st = settings_dict(s)
     via = dist.via_json if dist and dist.via_json else "[]"
-    return render(request, "route.html", o=o, d=d, dist=dist, via_json=via, back=back,
+    back = back.replace("%23", "#")
+    return render(request, "route.html", o=o, d=d, dist=dist, via_json=via, back=back, from_plan=_plan_date_from_back(back),
+                  solver_seconds=int(st.get("solver_seconds") or 20),
                   browser_key=os.environ.get("GOOGLE_MAPS_BROWSER_KEY", "").strip(), speed=st.get("avg_speed_mph") or 41)
 
 
 def _back_url(back: str, msg: str) -> str:
     """Append ?msg= to a return URL, keeping any #fragment at the end where browsers expect it."""
+    back = back.replace("%23", "#")                       # an over-encoded '#' would otherwise become part of the date
     base, frag = (back.split("#", 1) + [""])[:2]
     url = f"{base}{'&' if '?' in base else '?'}msg={msg}"
     return url + ("#" + frag if frag else "")
+
+
+def _plan_date_from_back(back: str):
+    """'/day/2026-09-10#plan' -> '2026-09-10' when the approval came from a built plan (so we can rebuild it)."""
+    m = re.match(r"^/day/(\d{4}-\d{2}-\d{2})", (back or "").replace("%23", "#"))
+    return m.group(1) if m else None
+
+
+def _after_approve(s, back: str, msg: str, rebuild: bool):
+    """Return to where the dispatcher came from; if they asked, rebuild that day's plan with the new miles first."""
+    pd = _plan_date_from_back(back) if rebuild else None
+    if pd:
+        res = optimizer.solve(s, pd)
+        if res.get("ok"):
+            optimizer.save_plan(s, res)
+            t = res["totals"]
+            msg += f". Plan rebuilt: {t['loads']} loads on {t['drivers_used']} drivers"
+            if t["unassigned"]: msg += f", {t['unassigned']} not fitted"
+        else:
+            msg += f". Plan NOT rebuilt: {res.get('error')}"
+    return RedirectResponse(_back_url(back or "/mileage", msg), status_code=303)
 
 
 def _approve(s, a, b, miles, minutes, kind, via, poly, note, steps=None):
@@ -354,7 +415,7 @@ async def route_approve(request: Request, a: int, b: int, s: Session = Depends(g
                  f.get("rev_via"), f.get("rev_polyline"), f.get("note"), f.get("rev_steps"))
         msg += f" (reverse {fnum(f.get('rev_miles'))} mi)"
     s.commit()
-    return RedirectResponse(_back_url(f.get("back") or f"/route/{a}/{b}", msg), status_code=303)
+    return _after_approve(s, f.get("back") or f"/route/{a}/{b}", msg, bool(f.get("rebuild")))
 
 
 @app.post("/route/{a}/{b}/manual")
@@ -366,7 +427,7 @@ async def route_manual(request: Request, a: int, b: int, s: Session = Depends(ge
     _approve(s, a, b, miles, fnum(f.get("minutes")), "manual-miles", None, None, None)
     if f.get("reverse"): _approve(s, b, a, miles, fnum(f.get("minutes")), "manual-miles", None, None, None)
     s.commit()
-    return RedirectResponse(_back_url(f.get("back") or f"/route/{a}/{b}", f"Approved+{miles}+mi+(typed)"), status_code=303)
+    return _after_approve(s, f.get("back") or f"/route/{a}/{b}", f"Approved {miles} mi (typed)", bool(f.get("rebuild")))
 
 
 @app.post("/route/{a}/{b}/unapprove")
@@ -377,7 +438,7 @@ async def route_unapprove(request: Request, a: int, b: int, s: Session = Depends
         d.approved = False; d.approved_at = None; d.route_kind = None; d.via_json = None; d.polyline = None
         d.override_miles = None; d.override_minutes = None
         s.commit()
-    return RedirectResponse(_back_url(f.get("back") or f"/route/{a}/{b}", "Approval+cleared"), status_code=303)
+    return _after_approve(s, f.get("back") or f"/route/{a}/{b}", "Approval cleared", bool(f.get("rebuild")))
 
 
 # ---------------- Journey Management Plans ----------------
@@ -508,6 +569,10 @@ async def companies_save(request: Request, s: Session = Depends(get_db)):
         if pct is None or not (0 < pct <= 100):
             return RedirectResponse("/companies?msg=Enter+the+sub-hauler's+share+as+a+percent+between+1+and+100", status_code=303)
         c.share_pct = pct
+        c.petrol_owned = bool(f.get("petrol_owned"))
+        c.priority = fint(f.get("priority")) or (1 if c.petrol_owned else 2)
+    else:
+        c.priority = 1
     s.add(c); s.commit()
     return RedirectResponse(f"/companies?msg=Saved+{c.name}", status_code=303)
 
@@ -570,7 +635,7 @@ def drivers_samsara(s: Session = Depends(get_db)):
 
 @app.post("/day/{plan_date}/samsara")
 def day_samsara(plan_date: str, s: Session = Depends(get_db)):
-    return RedirectResponse(f"/day/{plan_date}?msg={samsara.pull_hos(s, plan_date)}", status_code=303)
+    return RedirectResponse(f"/day/{plan_date}?msg={samsara.pull_hos(s, plan_date)}#drivers", status_code=303)
 
 
 def _driver_form(request, s, drv):
@@ -598,6 +663,7 @@ async def driver_save(request: Request, s: Session = Depends(get_db)):
     d.yard_id = fint(f.get("yard_id"))
     d.company_id = fint(f.get("company_id")) or petrol_company(s).id
     d.active = bool(f.get("active"))
+    d.can_gauge = bool(f.get("can_gauge"))
     d.truck = (f.get("truck") or "").strip() or None
     d.usual_shift = f.get("usual_shift") or None
     d.max_drive_hours = fnum(f.get("max_drive_hours"))
@@ -624,7 +690,7 @@ def apply_standing_orders(s: Session, plan_date: str) -> int:
         if so.end_date and plan_date > so.end_date: continue
         s.add(LoadRequest(plan_date=plan_date, lane_id=so.lane_id, count=so.count or 1, priority=so.priority or "normal",
                           earliest_pickup=so.earliest_pickup, latest_pickup=so.latest_pickup, standing_order_id=so.id,
-                          notes=so.notes))
+                          notes=so.notes, tank_id=so.tank_id))
         n += 1
     if n: s.commit()
     return n
@@ -664,8 +730,13 @@ def _day_ctx(s: Session, plan_date: str):
         drv_rows.append(dict(d=d, x=x, available=(x.available if x else not off_today), shift=(x.shift if x else (d.usual_shift or "AM")),
                              off_today=off_today, call=call, phone=(d.company.dispatch_phone if call else None)))
     loads = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup),
-                                         joinedload(LoadRequest.lane).joinedload(Lane.dropoff)) \
+                                         joinedload(LoadRequest.lane).joinedload(Lane.dropoff), joinedload(LoadRequest.tank)) \
         .filter(LoadRequest.plan_date == plan_date, LoadRequest.status != "cancelled").all()
+    tanks_by_loc = {}
+    for tk in s.query(Tank).filter(Tank.active == True).order_by(Tank.name).all():
+        tanks_by_loc.setdefault(tk.location_id, []).append(tk)
+    gaugers_today = [r["d"].name for r in drv_rows if r["available"] and r["d"].can_gauge]
+    needs_gauge = any(l.lane.pickup.requires_gauging or l.gauge in ("haul", "only") for l in loads)
     loads.sort(key=lambda l: (PRIORITIES.index(l.priority or "normal"), l.lane.pickup.name))
     load_rows = []
     tot = dict(count=0, rev=0.0, rev_fsc=0.0, pay=0.0)
@@ -684,7 +755,9 @@ def _day_ctx(s: Session, plan_date: str):
                 weekday_long=d0.strftime("%A"), pretty_date=d0.strftime("%B %-d, %Y"), short_date=d0.strftime("%b %-d"), weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
                 avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"],
-                has_samsara=bool(samsara.token()))
+                has_samsara=bool(samsara.token()), tanks_by_loc=tanks_by_loc, gaugers_today=gaugers_today, needs_gauge=needs_gauge,
+                lane_tanks_json=json.dumps({ln.id: [[tk.id, tk.name] for tk in tanks_by_loc.get(ln.pickup_id, [])] for ln in lanes_all}),
+                lane_gauge_json=json.dumps({ln.id: bool(ln.pickup.requires_gauging) for ln in lanes_all}))
 
 
 # ---------------- Standing orders (recurring daily loads) ----------------
@@ -744,7 +817,7 @@ async def day_drivers_save(request: Request, plan_date: str, s: Session = Depend
         x.notes = f.get(f"dnote_{d.id}") or None
         s.add(x)
     s.commit()
-    return RedirectResponse(f"/day/{plan_date}?msg=Driver+availability+saved", status_code=303)
+    return RedirectResponse(f"/day/{plan_date}?msg=Driver+availability+saved#drivers", status_code=303)
 
 
 @app.post("/day/{plan_date}/loads/add")
@@ -753,9 +826,10 @@ async def day_load_add(request: Request, plan_date: str, s: Session = Depends(ge
     l = LoadRequest(plan_date=plan_date, lane_id=int(f["lane_id"]), count=fint(f.get("count")) or 1,
                     priority=f.get("priority") or "normal", must_go_by=f.get("must_go_by") or None,
                     earliest_pickup=f.get("earliest_pickup") or None, latest_pickup=f.get("latest_pickup") or None,
-                    bbl_override=fnum(f.get("bbl_override")), notes=f.get("notes") or None)
+                    bbl_override=fnum(f.get("bbl_override")), notes=f.get("notes") or None,
+                    tank_id=fint(f.get("tank_id")), gauge=f.get("gauge") or None)
     s.add(l); s.commit()
-    return RedirectResponse(f"/day/{plan_date}?msg=Load+added", status_code=303)
+    return RedirectResponse(f"/day/{plan_date}?msg=Load+added#loads", status_code=303)
 
 
 @app.post("/day/{plan_date}/loads/{load_id}")
@@ -776,8 +850,10 @@ async def day_load_update(request: Request, plan_date: str, load_id: int, s: Ses
         l.bbl_override = fnum(f.get("bbl_override"))
         l.status = f.get("status") or l.status
         l.notes = f.get("notes") or None
+        if "tank_id" in f: l.tank_id = fint(f.get("tank_id"))
+        if "gauge" in f: l.gauge = f.get("gauge") or None
     s.commit()
-    return RedirectResponse(f"/day/{plan_date}?msg=Updated", status_code=303)
+    return RedirectResponse(f"/day/{plan_date}?msg=Updated#loads", status_code=303)
 
 
 @app.post("/day/{plan_date}/plan")

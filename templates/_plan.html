@@ -16,10 +16,12 @@
 {% for sh in plan.shifts %}
 <div class="shift {% if not sh.used %}unused{% endif %}">
   <div class="shift-head">
-    <b>{{ sh.driver }}</b> {% if sh.is_sub %}<span class="pill sub" title="sub-hauler: keeps {{ sh.share_pct|int }}% of load pay plus the fuel surcharge">{{ sh.company }}</span>{% endif %}<span class="pill">{{ sh.shift }}</span> {% if sh.truck %}<span class="pill">truck {{ sh.truck }}</span>{% endif %} <span class="muted">{{ sh.yard }}</span>
+    <b>{{ sh.driver }}</b> {% if sh.is_sub %}<span class="pill sub" title="sub-hauler: keeps {{ sh.share_pct|int }}% of load pay plus the fuel surcharge{% if sh.owned %} — Petrol-owned{% endif %}">{{ sh.company }}{% if sh.owned %} · Petrol-owned{% endif %}</span>{% endif %}{% if sh.can_gauge %}<span class="pill gauge">gauger</span> {% endif %}<span class="pill">{{ sh.shift }}</span> {% if sh.truck %}<span class="pill">truck {{ sh.truck }}</span>{% endif %} <span class="muted">{{ sh.yard }}</span>
     {% if sh.used %}
-      · {{ sh.loads }} load{{ 's' if sh.loads != 1 }} · out {{ sh.start|hm }} back {{ sh.end|hm }} · {{ sh.duty_hours }} h on duty (max {{ sh.duty_cap_h }}) · {{ sh.drive_hours }} h driving (max {{ sh.drive_cap_h }}) · {{ '%.0f'|format(sh.loaded_miles) }} loaded / {{ '%.0f'|format(sh.empty_miles) }} empty mi
-      {% if sh.is_sub %}
+      · {{ sh.loads }} load{{ 's' if sh.loads != 1 }}{% if sh.gauges %} + {{ sh.gauges }} gauge{{ 's' if sh.gauges != 1 }}{% endif %} · out {{ sh.start|hm }} back {{ sh.end|hm }} · {{ sh.duty_hours }} h on duty (max {{ sh.duty_cap_h }}) · {{ sh.drive_hours }} h driving (max {{ sh.drive_cap_h }}) · {{ '%.0f'|format(sh.loaded_miles) }} loaded / {{ '%.0f'|format(sh.empty_miles) }} empty mi
+      {% if sh.is_sub and sh.owned %}
+      <span class="{% if sh.meets_target %}ok-n{% else %}bad-n{% endif %}"><b>{{ sh.per_hour|money }}/hr</b></span> base · {{ sh.per_hour_fsc|money }}/hr with FSC · revenue {{ sh.revenue|money }} · profit {{ sh.profit|money }} <span class="muted">(driver pay {{ sh.driver_pay|money }}, fuel {{ sh.fuel|money }})</span> · <span class="muted">settlement: {{ sh.company }} share {{ sh.sub_pay|money }} + FSC {{ sh.sub_fsc|money }}</span>
+      {% elif sh.is_sub %}
       · revenue {{ sh.revenue|money }} · sub gets {{ sh.sub_pay|money }} + FSC {{ sh.sub_fsc|money }} · <b>Petrol margin {{ sh.profit|money }}</b> ({{ sh.margin_per_hour|money }}/hr)
       {% else %}
       <span class="{% if sh.meets_target %}ok-n{% else %}bad-n{% endif %}"><b>{{ sh.per_hour|money }}/hr</b></span> base · {{ sh.per_hour_fsc|money }}/hr with FSC · revenue {{ sh.revenue|money }} · profit {{ sh.profit|money }}
@@ -32,10 +34,10 @@
   {% for st in sh.stops %}
   <tr class="stop-{{ st.kind }}">
     <td>{{ st.arrive|hm }}{% if st.kind != 'yard' %} – {{ st.depart|hm }}{% endif %}</td>
-    <td>{% if st.kind == 'yard' %}<span class="muted">{{ 'Leave' if loop.first else 'Return' }} {{ st.name }}</span>{% elif st.kind == 'pickup' %}<b>Load</b> at {{ st.name }}{% else %}<b>Offload</b> at {{ st.name }}{% endif %}</td>
-    <td class="muted">{% if st.kind != 'yard' %}{{ st.lane }}{% if st.account %} · {{ st.account[:24] }}{% endif %}{% if st.priority == 'must' %} <span class="pri-must">MUST</span>{% endif %}{% endif %}</td>
+    <td>{% if st.kind == 'yard' %}<span class="muted">{{ 'Leave' if loop.first else 'Return' }} {{ st.name }}</span>{% elif st.kind == 'gauge' %}<span class="pill gauge">GAUGE ONLY</span> {{ st.name }}{% if st.tank %} · {{ st.tank }}{% endif %} <span class="muted">(sample, no load — others load after)</span>{% elif st.kind == 'pickup' %}<b>Load</b> at {{ st.name }}{% if st.tank %} <span class="muted">· {{ st.tank }}</span>{% endif %}{% if st.gauge %} <span class="pill gauge" title="first load from this tank: gauge it while loading">GAUGE</span>{% endif %}{% else %}<b>Offload</b> at {{ st.name }}{% endif %}</td>
+    <td class="muted">{% if st.kind not in ('yard', 'gauge') %}{{ st.lane }}{% if st.account %} · {{ st.account[:24] }}{% endif %}{% if st.priority == 'must' %} <span class="pri-must">MUST</span>{% endif %}{% endif %}</td>
     <td class="num">{{ '%.0f'|format(st.miles) if st.miles else '' }}</td>
-    <td>{% if st.leg_from is defined %}<a class="pill {{ 'approved' if st.leg_ok else 'review' }}" href="/route/{{ st.leg_from }}/{{ st.loc_id }}?back={{ ('/day/' ~ plan.plan_date ~ '%23plan')|urlencode }}" title="{{ 'Approved route — click to view or change' if st.leg_ok else 'Route not reviewed yet — click to approve' }}">{{ 'approved' if st.leg_ok else 'review' }}</a>{% endif %}</td>
+    <td>{% if st.leg_from is defined %}<a class="pill {{ 'approved' if st.leg_ok else 'review' }}" href="/route/{{ st.leg_from }}/{{ st.loc_id }}?back={{ ('/day/' ~ plan.plan_date ~ '#plan')|urlencode }}" title="{{ 'Approved route — click to view or change' if st.leg_ok else 'Route not reviewed yet — click to approve' }}">{{ 'approved' if st.leg_ok else 'review' }}</a>{% endif %}</td>
     <td class="num">{{ '%.0f'|format(st.bbl) if st.kind == 'dropoff' else '' }}</td>
     <td class="num">{{ st.rev|money if st.kind == 'dropoff' else '' }}</td>
     <td class="num muted">{{ st.rev_fsc|money if st.kind == 'dropoff' else '' }}</td>
@@ -51,9 +53,9 @@
 <div class="wrap"><table>
 <tr><th>Company</th><th class="num">Drivers</th><th class="num">Loads</th><th class="num">bbl</th><th class="num">Hours</th><th class="num">Load pay (base)</th><th class="num">Sub's share</th><th class="num">FSC to sub</th><th class="num">Petrol keeps (base)</th></tr>
 {% for c in plan.by_company %}
-<tr><td>{{ c.company }}</td><td class="num">{{ c.drivers }}</td><td class="num">{{ c.loads }}</td><td class="num">{{ '%.0f'|format(c.bbl) }}</td><td class="num">{{ '%.1f'|format(c.hours) }}</td>
+<tr><td>{{ c.company }}{% if c.owned %} <span class="muted">(Petrol-owned)</span>{% endif %}</td><td class="num">{{ c.drivers }}</td><td class="num">{{ c.loads }}</td><td class="num">{{ '%.0f'|format(c.bbl) }}</td><td class="num">{{ '%.1f'|format(c.hours) }}</td>
     <td class="num">{{ c.revenue|money }}</td><td class="num">{{ c.sub_pay|money if c.is_sub else '—' }}</td><td class="num">{{ c.sub_fsc|money if c.is_sub else '—' }}</td>
-    <td class="num"><b>{{ c.profit|money }}</b>{% if not c.is_sub %} <span class="muted">after driver pay, fuel, inspections</span>{% endif %}</td></tr>
+    <td class="num"><b>{{ c.profit|money }}</b>{% if not c.is_sub or c.owned %} <span class="muted">after driver pay, fuel, inspections</span>{% endif %}</td></tr>
 {% endfor %}
 </table></div>
 <p class="muted">Sub-haulers are paid their share of the base load pay plus the entire fuel surcharge; they cover their own drivers and fuel. "Petrol keeps" for a sub is base load pay minus the sub's share.</p>
@@ -62,9 +64,9 @@
 {% if plan.unassigned %}
 <h3 class="pri-must">Not fitted ({{ plan.unassigned|length }})</h3>
 <div class="wrap"><table>
-<tr><th>Priority</th><th>Lane</th><th>Account</th><th class="num">Revenue</th><th class="num">Profit before fuel</th></tr>
+<tr><th>Priority</th><th>Lane</th><th>Account</th><th class="num">Revenue</th><th class="num">Profit before fuel</th><th>Why</th></tr>
 {% for u in plan.unassigned %}
-<tr><td class="pri-{{ u.priority }}">{{ u.priority }}</td><td>{{ u.lane }}</td><td class="muted">{{ u.account }}</td><td class="num">{{ u.rev|money }}</td><td class="num">{{ u.profit|money }}</td></tr>
+<tr><td class="pri-{{ u.priority }}">{{ u.priority }}</td><td>{{ u.lane }}{% if u.tank %} <span class="muted">· {{ u.tank }}</span>{% endif %}</td><td class="muted">{{ u.account }}</td><td class="num">{{ u.rev|money }}</td><td class="num">{{ u.profit|money }}</td><td class="muted">{{ u.why or '' }}</td></tr>
 {% endfor %}
 </table></div>
 <p class="muted">These didn't fit in the available driver hours (or weren't worth the fuel). Options: add a driver, extend a start window, move a load to another day, or mark it flexible and rebuild.</p>

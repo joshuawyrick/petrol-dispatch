@@ -16,6 +16,8 @@
   <div class="hint">Blank = the defaults from Settings. Lower them for a driver you want to keep to shorter days.</div>
   <div class="row"><label>Regular days off</label><span>{% for d in days %}<label style="margin-right:10px"><input type="checkbox" name="off_{{ d }}" value="1" {% if d in days_off %}checked{% endif %}> {{ d }}</label>{% endfor %}</span></div>
   <div class="hint">Optional. Drivers without set days off just get marked unavailable on the Daily Plan page when they're resetting.</div>
+  <div class="row"><label>Can gauge</label><input type="checkbox" name="can_gauge" value="1" {% if drv and drv.can_gauge %}checked{% endif %}></div>
+  <div class="hint">Trained and equipped to gauge a tank (sample, API gravity, BS&amp;W). Pickups marked "requires gauging" on the Locations page need one of these drivers on the first load from each tank.</div>
   <div class="row"><label>Active</label><input type="checkbox" name="active" value="1" {% if not drv or drv.active %}checked{% endif %}></div>
   <div class="row"><label>Notes</label><textarea name="notes">{{ drv.notes if drv and drv.notes else '' }}</textarea></div>
   <p><button type="submit">Save</button> <a class="btn secondary" href="/drivers">Back</a></p>

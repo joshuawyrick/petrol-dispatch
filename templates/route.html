@@ -46,8 +46,9 @@
       <label class="chk"><input type="checkbox" name="reverse" id="revchk" value="1" checked> Also approve the reverse direction ({{ d.name[:22] }} → {{ o.name[:22] }}) using the same roads
         <span class="muted" id="revinfo"></span></label>
       <label class="chk">Note <input type="text" name="note" placeholder="e.g. use Hwy 33, avoid canal road" value="{{ dist.override_note if dist and dist.override_note else '' }}" style="min-width:220px"></label>
+      {% if from_plan %}<label class="chk"><input type="checkbox" name="rebuild" value="1" checked> Rebuild the {{ from_plan }} plan with the new miles (about {{ solver_seconds }} s) — a longer route may move this load to another driver</label>{% endif %}
       <div class="bar" style="margin-top:8px">
-        <button type="submit" id="approveBtn" {% if not browser_key %}disabled{% endif %}>Approve this route</button>
+        <button type="submit" id="approveBtn" {% if not browser_key %}disabled{% endif %}>{{ 'Approve & rebuild plan' if from_plan else 'Approve this route' }}</button>
         <button type="button" class="secondary" id="resetBtn" {% if not browser_key %}disabled{% endif %}>Reset to Google's default</button>
       </div>
     </form>
@@ -59,6 +60,7 @@
         <label>miles <input type="number" step="0.1" name="miles" class="w80" value="{{ dist.override_miles if dist and dist.override_miles else '' }}"></label>
         <label>minutes <input type="number" step="1" name="minutes" class="w80" value="{{ dist.override_minutes if dist and dist.override_minutes else '' }}"></label>
         <label class="chk"><input type="checkbox" name="reverse" value="1" checked> reverse too</label>
+        {% if from_plan %}<label class="chk"><input type="checkbox" name="rebuild" value="1" checked> rebuild plan</label>{% endif %}
         <button type="submit" class="secondary small">Save as approved</button>
       </form>
     </details>
@@ -66,6 +68,7 @@
     {% if dist and dist.approved %}
     <form method="post" action="/route/{{ o.id }}/{{ d.id }}/unapprove" class="card" onsubmit="return confirm('Clear the approval for this leg? The engine will go back to Google\'s mileage.')">
       <input type="hidden" name="back" value="{{ back or '' }}">
+      {% if from_plan %}<input type="hidden" name="rebuild" value="1">{% endif %}
       <button type="submit" class="secondary small">Clear approval</button>
     </form>
     {% endif %}
@@ -128,7 +131,7 @@ function onApprove(e) {
   document.getElementById('f_via').value = JSON.stringify(s.via); document.getElementById('f_poly').value = s.poly;
   document.getElementById('f_steps').value = JSON.stringify(s.steps);
   const form = document.getElementById('approveForm'); const btn = document.getElementById('approveBtn');
-  btn.disabled = true; btn.textContent = 'Saving…';
+  btn.disabled = true; btn.textContent = document.querySelector('input[name=rebuild]:checked') ? 'Saving and rebuilding the plan… about {{ solver_seconds }} seconds' : 'Saving…';
   if (!document.getElementById('revchk').checked) { form.submit(); return false; }
   // compute the reverse direction through the same via points (reversed) so its miles are real, not assumed
   const rv = s.via.slice().reverse().map(p => ({location: new google.maps.LatLng(p[0], p[1]), stopover: false}));

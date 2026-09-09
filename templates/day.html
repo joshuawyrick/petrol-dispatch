@@ -22,12 +22,13 @@
 </div>
 
 {# ================= 1. LOADS ================= #}
-<section class="panel">
+<section class="panel" id="loads">
 <div class="panel-head">
   <h2>Step 1 · Loads to haul on {{ weekday }} {{ short_date }} <span class="count">{{ tot.count }}</span></h2>
   <label class="toggle"><input type="checkbox" onchange="document.body.classList.toggle('show-load-detail', this.checked)"> show details (deadline, window, status, notes)</label>
 </div>
 {% if standing_added %}<div class="flash">{{ standing_added }} standing order(s) were added to this day automatically. Change a count or delete a line if today is different.</div>{% endif %}
+{% if needs_gauge and not gaugers_today %}<div class="todo">Some loads today need gauging but no driver marked "can gauge" is working. Tick a gauger in Step 2 (or set "can gauge" on the Drivers page) or those loads won't be planned.</div>{% endif %}
 <div class="wrap"><table class="loads">
 <tr>
   <th>Priority</th><th>Lane</th><th class="num">Loads</th><th class="num">bbl / load</th><th class="num">Revenue</th><th class="num muted">with FSC</th>
@@ -37,7 +38,17 @@
 <tr>
 <form method="post" action="/day/{{ plan_date }}/loads/{{ l.id }}">
   <td><select name="priority" class="pri-{{ l.priority or 'normal' }}">{% for p in priorities %}<option value="{{ p }}" {% if l.priority == p %}selected{% endif %}>{{ p }}</option>{% endfor %}</select></td>
-  <td><b>{{ l.lane.pickup.name }}</b> → {{ l.lane.dropoff.name }}{% if l.standing_order_id %} <span class="pill" title="from a standing order">daily</span>{% endif %}<br><span class="muted">{{ l.lane.account or '' }}</span></td>
+  {% set tks = tanks_by_loc.get(l.lane.pickup_id, []) %}{% set gz = l.lane.pickup.requires_gauging or l.gauge in ('haul', 'only') %}
+  <td><b>{{ l.lane.pickup.name }}</b> → {{ l.lane.dropoff.name }}{% if l.standing_order_id %} <span class="pill" title="from a standing order">daily</span>{% endif %}<br><span class="muted">{{ l.lane.account or '' }}</span>
+    {% if tks or gz %}<div class="gaugebar">
+      {% if tks %}<select name="tank_id" title="which tank these loads come from"><option value="">tank?</option>{% for tk in tks %}<option value="{{ tk.id }}" {% if l.tank_id == tk.id %}selected{% endif %}>{{ tk.name }}</option>{% endfor %}</select>{% endif %}
+      {% if gz or tks %}<select name="gauge" class="{% if gz %}gauge-on{% endif %}" title="gauging for the first load from this tank today">
+        <option value="" {% if not l.gauge %}selected{% endif %}>{{ 'gauge: gauger hauls 1st load' if l.lane.pickup.requires_gauging else 'no gauge needed' }}</option>
+        <option value="haul" {% if l.gauge == 'haul' %}selected{% endif %}>gauge: gauger hauls 1st load</option>
+        <option value="only" {% if l.gauge == 'only' %}selected{% endif %}>gauge only, then anyone hauls</option>
+        <option value="none" {% if l.gauge == 'none' %}selected{% endif %}>no gauge needed today</option>
+      </select>{% endif %}
+    </div>{% endif %}</td>
   <td class="num"><input type="number" name="count" class="w60" min="1" value="{{ l.count }}"></td>
   <td class="num"><input type="number" step="1" name="bbl_override" class="w70" value="{{ l.bbl_override if l.bbl_override else '' }}" placeholder="{{ '%.0f'|format(r.bbl) }}" title="blank = pickup average"></td>
   <td class="num">${{ '{:,.0f}'.format(r.rev * l.count) }}</td>
@@ -66,6 +77,8 @@
     <select name="lane_id" required style="min-width:340px"><option value="">— choose lane (pickup → drop-off) —</option>{% for ln in lanes_all %}<option value="{{ ln.id }}">{{ ln.pickup.name }} → {{ ln.dropoff.name }}{% if ln.account %} ({{ ln.account[:22] }}){% endif %}</option>{% endfor %}</select>
     <label>how many <input type="number" name="count" class="w60" min="1" value="1"></label>
     <select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if p=='normal' %}selected{% endif %}>{{ p }}</option>{% endfor %}</select>
+    <select name="tank_id" id="add_tank" hidden><option value="">tank?</option></select>
+    <select name="gauge" id="add_gauge" hidden><option value="">gauge: gauger hauls 1st load</option><option value="only">gauge only, then anyone hauls</option><option value="none">no gauge needed today</option></select>
     <button type="submit">Add</button>
     <a href="#" class="muted small-link" onclick="document.getElementById('addmore').hidden=!document.getElementById('addmore').hidden; return false;">more options…</a>
   </div>
@@ -77,10 +90,23 @@
   </div>
   <div class="muted hint-line">Barrels and rate come from the pickup location and the lane automatically. <b>must</b> = has to move this day · <b>normal</b> = this day if it fits · <b>flexible</b> = can slide.</div>
 </form>
+<script>
+(function(){
+  const TANKS = {{ lane_tanks_json|safe }}, GAUGE = {{ lane_gauge_json|safe }};
+  const sel = document.querySelector('.addbar select[name=lane_id]'), tk = document.getElementById('add_tank'), gg = document.getElementById('add_gauge');
+  sel.addEventListener('change', () => {
+    const tanks = TANKS[sel.value] || [];
+    tk.innerHTML = '<option value="">tank?</option>' + tanks.map(t => `<option value="${t[0]}">${t[1]}</option>`).join('');
+    tk.hidden = tanks.length === 0;
+    gg.hidden = !GAUGE[sel.value] && tanks.length === 0;
+    gg.options[0].text = GAUGE[sel.value] ? 'gauge: gauger hauls 1st load' : 'no gauge needed';
+  });
+})();
+</script>
 </section>
 
 {# ================= 2. DRIVERS ================= #}
-<section class="panel">
+<section class="panel" id="drivers">
 <div class="panel-head">
   <h2>Step 2 · Drivers working {{ weekday }} {{ short_date }} <span class="count">{{ avail }} of {{ drv_rows|length }}</span></h2>
   <label class="toggle"><input type="checkbox" onchange="document.body.classList.toggle('show-drv-detail', this.checked)"> show hours detail (drive / on-duty left, notes)</label>

@@ -27,35 +27,52 @@ SETTINGS = [
     ("solver_seconds", 20, "Optimizer thinking time", "seconds", "Longer = slightly better plans; 10-60"),
     ("reset_after_hours", 80, "On-duty hours before a 34-hour reset", "hours", ""),
     ("reset_hours", 34, "Full reset length", "hours", ""),
+    ("gauge_minutes", 15, "Time to gauge a tank", "minutes", "Sample + API gravity / BS&W; done while loading when the gauger hauls"),
+    ("priority_step", 30, "Priority strength between company tiers", "% of load profit", "A load on a tier-2 company counts as this much worse than on tier 1 (tier 3 = double). 30 = fill tier 1 first unless it's a very bad fit; 90 = always"),
 ]
 
 
-# name, short name, sub-hauler's share of load pay (%) — None = Petrol Transport itself
+# name, short name, sub-hauler's share of load pay (%) — None = Petrol Transport itself, Petrol-owned?
+# Priority: Petrol and Petrol-owned subs = 1 (fill first), 25% subs = 2, 10% subs = 3
 COMPANIES = [
-    ("Petrol Transport Inc.", "Petrol", None),
-    ("MKB Transportation, Inc.", "MKB", 90),
-    ("King D Trucking, Inc.", "King D", 90),
-    ("Copperhead Oil Field Services", "Copperhead", 90),
-    ("Quail Canyon Transport, Inc.", "Quail Canyon", 90),
-    ("Flying B Transport, Inc.", "Flying B", 90),
-    ("J&V Transport, LLC", "J&V", 75),
-    ("Transportillo, LLC", "Transportillo", 75),
-    ("California Coast Services LLC", "Cal Coast", 75),
-    ("J Oregon Trucking LLC", "J Oregon", 75),
-    ("Maye Trucking", "Maye", 75),
-    ("Lucas Trucking, LLC", "Lucas", 75),
+    ("Petrol Transport Inc.", "Petrol", None, False),
+    ("MKB Transportation, Inc.", "MKB", 90, False),
+    ("King D Trucking, Inc.", "King D", 90, False),
+    ("Copperhead Oil Field Services", "Copperhead", 90, True),
+    ("Quail Canyon Transport, Inc.", "Quail Canyon", 90, True),
+    ("Flying B Transport, Inc.", "Flying B", 90, True),
+    ("J&V Transport, LLC", "J&V", 75, False),
+    ("Transportillo, LLC", "Transportillo", 75, False),
+    ("California Coast Services LLC", "Cal Coast", 75, False),
+    ("J Oregon Trucking LLC", "J Oregon", 75, False),
+    ("Maye Trucking", "Maye", 75, False),
+    ("Lucas Trucking, LLC", "Lucas", 75, False),
 ]
+
+
+def default_priority(share, owned):
+    if share is None or owned: return 1
+    return 3 if share >= 85 else 2
 
 
 def ensure_companies(s) -> int:
-    """Make sure Petrol + the known sub-haulers exist (never changes a share % the dispatcher already edited)."""
+    """Make sure Petrol + the known sub-haulers exist (never changes a share % the dispatcher already edited).
+    Also fills in priority / Petrol-owned for rows created before those fields existed."""
     have = {c.name.strip().lower(): c for c in s.query(Company).all()}
     n = 0
-    for name, short, share in COMPANIES:
-        if name.lower() in have: continue
-        s.add(Company(name=name, short_name=short, is_petrol=share is None, share_pct=share, has_samsara=share is None, active=True))
+    for name, short, share, owned in COMPANIES:
+        c = have.get(name.lower())
+        if c:
+            if c.priority is None:
+                c.petrol_owned = owned if c.petrol_owned is None else c.petrol_owned
+                c.priority = default_priority(c.share_pct, c.petrol_owned)
+            continue
+        s.add(Company(name=name, short_name=short, is_petrol=share is None, share_pct=share, has_samsara=share is None, active=True,
+                      petrol_owned=owned, priority=default_priority(share, owned)))
         n += 1
-    if n: s.commit()
+    for c in s.query(Company).all():                       # subs added by hand before this version
+        if c.priority is None: c.priority = default_priority(c.share_pct, bool(c.petrol_owned))
+    s.commit()
     return n
 
 

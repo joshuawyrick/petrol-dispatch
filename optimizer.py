@@ -21,7 +21,7 @@ import json, math
 from datetime import datetime, timedelta
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from sqlalchemy.orm import Session, joinedload
-from db import Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, Company, CompanyLaneRate
+from db import Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, Company, CompanyLaneRate, LocationRestriction, Tank
 import fsc as fscmod
 from mileage import haversine_miles, STRAIGHT_LINE_FACTOR
 
@@ -61,7 +61,16 @@ class DayInputs:
         self.handoff = int(st.get("truck_handoff_minutes") or 30)
         self.inspection_cost = (st.get("inspection_minutes") or 45) / 60 * (st.get("min_wage") or 0)
         self.target = st.get("target_per_hour") or 135
+        self.gauge_min = int(st.get("gauge_minutes") or 15)
+        self.priority_step = (st.get("priority_step") if st.get("priority_step") is not None else 30) / 100.0   # share of a load's profit per tier step
         self.weekday = DAYS[datetime.strptime(plan_date, "%Y-%m-%d").weekday()]
+
+        # who/what can't go where: location id -> (set of driver ids, set of truck numbers)
+        self.restrict = {}
+        for r in s.query(LocationRestriction).all():
+            drs, trs = self.restrict.setdefault(r.location_id, (set(), set()))
+            if r.driver_id: drs.add(r.driver_id)
+            if r.truck: trs.add(r.truck.strip().upper())
 
         # sub-hauler deals: company default share + per-lane exceptions
         self.lane_rates = {(r.company_id, r.lane_id): r for r in s.query(CompanyLaneRate).all()}
@@ -81,11 +90,15 @@ class DayInputs:
             duty = int(min(self.duty_cap, ((x.duty_hours_left if x and x.duty_hours_left else None) or d.max_duty_hours or 99) * 60))
             if x and x.cycle_hours_left: duty = int(min(duty, x.cycle_hours_left * 60))
             co = d.company if (d.company and not d.company.is_petrol) else None
+            owned = bool(co and co.petrol_owned)
             truck = (d.truck or "").strip().upper() or None
             self.drivers.append(dict(driver=d, yard=d.yard, shift=shift, start=start, drive_cap=drive, duty_cap=duty,
                                      truck=truck, truck_key=(co.id if co else 0, truck) if truck else None,   # truck "02" at two subs ≠ same truck
                                      company=co, company_name=(co.short_name or co.name) if co else "",
-                                     share_pct=(co.share_pct if co and co.share_pct is not None else 0)))
+                                     share_pct=(co.share_pct if co and co.share_pct is not None else 0),
+                                     owned=owned, econ_sub=bool(co and not owned),         # Petrol-owned subs are costed like our own trucks
+                                     tier=int((co.priority if co and co.priority else 1) if co else 1),
+                                     can_gauge=bool(d.can_gauge)))
         # AM before PM so truck handoffs are AM -> PM
         self.drivers.sort(key=lambda v: (0 if v["shift"] == "AM" else 1, v["start"], v["driver"].name))
 
@@ -103,9 +116,17 @@ class DayInputs:
             pay = (lane.driver_pay or 0) * bbl
             pri = r.priority or "normal"
             if r.must_go_by and r.must_go_by <= plan_date: pri = "must"
+            gauge = r.gauge or ("haul" if lane.pickup.requires_gauging else "none")
             for k in range(r.count or 1):
                 self.loads.append(dict(req=r, lane=lane, unit=k + 1, bbl=bbl, rev=rev, pay=pay, priority=pri,
-                                       earliest=hm_to_min(r.earliest_pickup), latest=hm_to_min(r.latest_pickup)))
+                                       earliest=hm_to_min(r.earliest_pickup), latest=hm_to_min(r.latest_pickup),
+                                       tank_id=r.tank_id, tank=(r.tank.name if r.tank else None), gauge=gauge,
+                                       gkey=(lane.pickup_id, r.tank_id) if gauge != "none" else None))
+        # gauging groups: one per (pickup, tank) that needs a gauge today. Mode 'only' wins if any line asks for it.
+        self.ggroups = {}
+        for L in self.loads:
+            if L["gkey"]: self.ggroups.setdefault(L["gkey"], []).append(L)
+        self.gmode = {k: ("only" if any(L["gauge"] == "only" for L in v) else "haul") for k, v in self.ggroups.items()}
 
         # distances (override > google > straight-line estimate)
         self.locs = {l.id: l for l in s.query(Location).all()}
@@ -113,6 +134,12 @@ class DayInputs:
         for d in s.query(Distance).all():
             m = d.override_miles if d.override_miles else d.google_miles
             if m is not None: self.dist[(d.origin_id, d.dest_id)] = m
+
+    def allowed(self, drv: dict, loc_id: int) -> bool:
+        """False if this driver or their truck is barred from the location."""
+        r = self.restrict.get(loc_id)
+        if not r: return True
+        return drv["driver"].id not in r[0] and (drv["truck"] or "") not in r[1]
 
     def sub_pay(self, drv: dict, L: dict) -> float:
         """What a sub-hauler company gets for this load (base pay, before the surcharge they also receive in full)."""
@@ -156,6 +183,12 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
     for L in inp.loads:
         L["p_node"] = len(nodes); nodes.append(dict(loc=L["lane"].pickup, kind="pickup", load=L))
         L["d_node"] = len(nodes); nodes.append(dict(loc=L["lane"].dropoff, kind="dropoff", load=L))
+    # gauge-only visits: a gauger stops at the tank, samples, and leaves; the loads there wait for it
+    gauge_nodes = {}
+    for key, mode in inp.gmode.items():
+        if mode == "only":
+            gauge_nodes[key] = len(nodes)
+            nodes.append(dict(loc=inp.ggroups[key][0]["lane"].pickup, kind="gauge", load=None, gkey=key, tank=inp.ggroups[key][0]["tank"]))
     n_nodes, n_veh = len(nodes), len(inp.drivers)
     starts = [yard_node[v["yard"].id] for v in inp.drivers]
     mgr = pywrapcp.RoutingIndexManager(n_nodes, n_veh, starts, starts)
@@ -166,7 +199,9 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
     loc_of = [nd["loc"] for nd in nodes]
     def node_service(i):
         nd = nodes[i]
-        return 0 if nd["kind"] == "yard" else inp.service_min(nd["loc"], nd["kind"])
+        if nd["kind"] == "yard": return 0
+        if nd["kind"] == "gauge": return inp.gauge_min
+        return inp.service_min(nd["loc"], nd["kind"])
     drive_mat = [[inp.drive_min(loc_of[i].id, loc_of[j].id) for j in range(n_nodes)] for i in range(n_nodes)]
     miles_mat = [[inp.miles(loc_of[i].id, loc_of[j].id) for j in range(n_nodes)] for i in range(n_nodes)]
     fuel_cents = [[int(round(miles_mat[i][j] / inp.mpg * inp.diesel * 100)) for j in range(n_nodes)] for i in range(n_nodes)]
@@ -189,19 +224,23 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
     fuel_idx = routing.RegisterTransitCallback(fuel_cb)
     demand_idx = routing.RegisterUnaryTransitCallback(demand_cb)
     routing.SetArcCostEvaluatorOfAllVehicles(fuel_idx)
-    # sub-hauler vehicles: no fuel cost to us, but each drop-off "costs" the margin we give up versus our own driver
-    sub_cost_idx = {}
+    # per-vehicle cost = fuel (not for outside subs: they buy their own) + margin we give up on a sub's drop-off
+    #                    + a priority step so tier-1 companies fill up before tier 2, and tier 2 before tier 3
+    def make_cb(extra, use_fuel):
+        def cb(fi, ti):
+            i, j = mgr.IndexToNode(fi), mgr.IndexToNode(ti)
+            return (fuel_cents[i][j] if use_fuel else 0) + extra[j]
+        return cb
     for v, drv in enumerate(inp.drivers):
-        if not drv["company"]: continue
-        cost = [0] * n_nodes
+        extra = [0] * n_nodes
+        tier_frac = min(0.9, inp.priority_step * (drv["tier"] - 1))     # tier 2 = 30% of the load's profit, tier 3 = 60% (default)
         for L in inp.loads:
-            cost[L["d_node"]] = max(0, int(round((inp.sub_pay(drv, L) - L["pay"]) * 100)))
-        def make_cb(cost):
-            def cb(fi, ti): return cost[mgr.IndexToNode(ti)]
-            return cb
-        idx = routing.RegisterTransitCallback(make_cb(cost))
-        sub_cost_idx[v] = idx
-        routing.SetArcCostEvaluatorOfVehicle(idx, v)
+            profit_c = max(0, int(round((L["rev"] - L["pay"]) * 100)))
+            margin_c = max(0, int(round((inp.sub_pay(drv, L) - L["pay"]) * 100))) if drv["econ_sub"] else 0
+            # the bigger of "margin we give up" and "tier preference" — always below the drop penalty, so hauling still beats dropping
+            extra[L["d_node"]] = min(profit_c, max(margin_c, int(tier_frac * profit_c)))
+        if drv["econ_sub"] or tier_frac:
+            routing.SetArcCostEvaluatorOfVehicle(routing.RegisterTransitCallback(make_cb(extra, not drv["econ_sub"])), v)
 
     # ---------- dimensions ----------
     routing.AddDimension(time_idx, 8 * 60, HORIZON_MIN, False, "Time")     # slack = waiting allowed at a site
@@ -216,7 +255,7 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
         time_dim.CumulVar(st_i).SetRange(drv["start"], drv["start"] + 6 * 60)   # may leave up to 6 h after earliest start
         time_dim.SetSpanUpperBoundForVehicle(drv["duty_cap"], v)
         drive_dim.SetSpanUpperBoundForVehicle(drv["drive_cap"], v)
-        routing.SetFixedCostOfVehicle(0 if drv["company"] else int(inp.inspection_cost * 100), v)
+        routing.SetFixedCostOfVehicle(0 if drv["econ_sub"] else int(inp.inspection_cost * 100), v)
         # prefer leaving as early as possible / returning early: finalize end times in the objective
         routing.AddVariableMinimizedByFinalizer(time_dim.CumulVar(en_i))
         routing.AddVariableMinimizedByFinalizer(time_dim.CumulVar(st_i))
@@ -242,6 +281,43 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
             lo = L["earliest"] if L["earliest"] is not None else 0
             hi = L["latest"] if L["latest"] is not None else 1440
             time_dim.CumulVar(pi).SetRange(lo, hi)
+    # ---------- who can't go where ----------
+    for L in inp.loads:
+        pi, di = mgr.NodeToIndex(L["p_node"]), mgr.NodeToIndex(L["d_node"])
+        L["banned"] = [v for v, drv in enumerate(inp.drivers)
+                       if not (inp.allowed(drv, L["lane"].pickup_id) and inp.allowed(drv, L["lane"].dropoff_id))]
+        for v in L["banned"]:
+            routing.VehicleVar(pi).RemoveValue(v); routing.VehicleVar(di).RemoveValue(v)
+    for key, gn in gauge_nodes.items():
+        gi = mgr.NodeToIndex(gn)
+        for v, drv in enumerate(inp.drivers):
+            if not inp.allowed(drv, nodes[gn]["loc"].id): routing.VehicleVar(gi).RemoveValue(v)
+
+    # ---------- gauging ----------
+    gaugers = [v for v, drv in enumerate(inp.drivers) if drv["can_gauge"]]
+    non_gaugers = [v for v in range(n_veh) if v not in gaugers]
+    for key, group in inp.ggroups.items():
+        group.sort(key=lambda L: (L["req"].id, L["unit"]))
+        mode = inp.gmode[key]
+        if mode == "haul":
+            # the first load from this tank is hauled by a gauger; everyone else loads only after that gauge is done
+            G = group[0]; G["is_gauge_load"] = True
+            gi = mgr.NodeToIndex(G["p_node"])
+            for v in non_gaugers: routing.VehicleVar(gi).RemoveValue(v)
+            for L in group: L["needs_gauger"] = not gaugers
+            for O in group[1:]:
+                oi = mgr.NodeToIndex(O["p_node"])
+                solver.Add(routing.ActiveVar(oi) <= routing.ActiveVar(gi))
+                solver.Add(time_dim.CumulVar(oi) + (1 - routing.ActiveVar(oi)) * HORIZON_MIN >= time_dim.CumulVar(gi) + inp.gauge_min)
+        else:
+            gn = gauge_nodes[key]; gi = mgr.NodeToIndex(gn)
+            for v in non_gaugers: routing.VehicleVar(gi).RemoveValue(v)
+            routing.AddDisjunction([gi], 0)                 # free to skip — but then none of the tank's loads can go
+            for L in group:
+                L["needs_gauger"] = not gaugers
+                oi = mgr.NodeToIndex(L["p_node"])
+                solver.Add(routing.ActiveVar(oi) <= routing.ActiveVar(gi))
+                solver.Add(time_dim.CumulVar(oi) + (1 - routing.ActiveVar(oi)) * HORIZON_MIN >= time_dim.CumulVar(gi) + inp.gauge_min)
     # site open/close windows (repeat on day 2 of the horizon)
     for nd_i, nd in enumerate(nodes):
         if nd["kind"] == "yard": continue
@@ -268,13 +344,13 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
         return dict(ok=False, error="The solver could not find any feasible plan (check windows and hour limits).", plan_date=plan_date)
 
     # ---------- read the solution ----------
-    shifts, assigned = [], set()
+    shifts, assigned, gauged = [], set(), set()
     for v, drv in enumerate(inp.drivers):
         idx = routing.Start(v)
         stops, prev_node, loaded_mi, empty_mi, drive_m = [], mgr.IndexToNode(idx), 0.0, 0.0, 0
         t_start = sol.Value(time_dim.CumulVar(idx))
-        rev = pay = subpay = 0.0; n_loads = 0
-        is_sub = bool(drv["company"])
+        rev = pay = subpay = 0.0; n_loads = n_gauges = 0
+        is_sub = bool(drv["company"]); owned = drv["owned"]
         stops.append(dict(kind="yard", name=drv["yard"].name, loc_id=drv["yard"].id, arrive=t_start, depart=t_start, miles=0))
         idx = sol.Value(routing.NextVar(idx))
         while not routing.IsEnd(idx):
@@ -286,16 +362,22 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
             arrive = sol.Value(time_dim.CumulVar(idx))
             svc = node_service(node)
             L = nd["load"]
+            if nd["kind"] == "gauge":
+                stops.append(dict(kind="gauge", name=nd["loc"].name, loc_id=nd["loc"].id, arrive=arrive, depart=arrive + svc, miles=mi, drive_min=dm,
+                                  tank=nd.get("tank"), lane="", account="", priority=""))
+                n_gauges += 1; gauged.add(nd["gkey"]); prev_node = node; idx = sol.Value(routing.NextVar(idx)); continue
             stop = dict(kind=nd["kind"], name=nd["loc"].name, loc_id=nd["loc"].id, arrive=arrive, depart=arrive + svc, miles=mi, drive_min=dm,
                         load_id=L["req"].id, unit=L["unit"], lane=f'{L["lane"].pickup.name} → {L["lane"].dropoff.name}',
-                        account=L["lane"].account or "", bbl=L["bbl"], priority=L["priority"])
+                        account=L["lane"].account or "", bbl=L["bbl"], priority=L["priority"], tank=L.get("tank"),
+                        gauge=bool(L.get("is_gauge_load")) and nd["kind"] == "pickup")
             if nd["kind"] == "dropoff":
                 sp = inp.sub_pay(drv, L) if is_sub else 0.0
-                stop.update(rev=L["rev"], rev_fsc=L["rev"] * (1 + inp.fsc), pay=0.0 if is_sub else L["pay"],
+                stop.update(rev=L["rev"], rev_fsc=L["rev"] * (1 + inp.fsc), pay=L["pay"] if (not is_sub or owned) else 0.0,
                             sub_pay=round(sp, 2), margin=round(L["rev"] - sp, 2) if is_sub else None)
                 rev += L["rev"]; n_loads += 1; assigned.add(id(L))
+                if L.get("is_gauge_load"): gauged.add(L["gkey"])
                 if is_sub: subpay += sp
-                else: pay += L["pay"]
+                if not is_sub or owned: pay += L["pay"]
             stops.append(stop)
             prev_node = node
             idx = sol.Value(routing.NextVar(idx))
@@ -305,44 +387,51 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
         t_end = sol.Value(time_dim.CumulVar(idx))
         stops.append(dict(kind="yard", name=drv["yard"].name, loc_id=drv["yard"].id, arrive=t_end, depart=t_end, miles=mi, drive_min=dm))
         duty_m = t_end - t_start
-        used = n_loads > 0
+        used = n_loads > 0 or n_gauges > 0
         hrs = duty_m / 60 if duty_m else 0
-        if is_sub:
-            # Petrol's side of a sub-hauler shift: margin only; the sub gets its share plus the whole surcharge
+        if is_sub and not owned:
+            # an outside sub-hauler: Petrol's side is margin only; the sub gets its share plus the whole surcharge
             fuel = 0.0; insp = 0.0
             profit = rev - subpay
             profit_fsc = profit
         else:
+            # our own truck (or a Petrol-owned sub, which is really our truck with a different name on the door)
             fuel = (loaded_mi + empty_mi) / inp.mpg * inp.diesel
             insp = inp.inspection_cost if used else 0
             profit = rev - pay - fuel - insp
             profit_fsc = rev * (1 + inp.fsc) - pay - fuel - insp
         shifts.append(dict(
             driver=drv["driver"].name, driver_id=drv["driver"].id, yard=drv["yard"].name, shift=drv["shift"], truck=drv["truck"],
-            company=drv["company_name"], is_sub=is_sub, share_pct=drv["share_pct"],
-            used=used, loads=n_loads, stops=stops if used else [], start=t_start, end=t_end,
+            company=drv["company_name"], is_sub=is_sub, owned=owned, share_pct=drv["share_pct"], tier=drv["tier"], can_gauge=drv["can_gauge"],
+            used=used, loads=n_loads, gauges=n_gauges, stops=stops if used else [], start=t_start, end=t_end,
             duty_hours=round(hrs, 2), drive_hours=round(drive_m / 60, 2), loaded_miles=round(loaded_mi, 1), empty_miles=round(empty_mi, 1),
             revenue=round(rev, 2), revenue_fsc=round(rev * (1 + inp.fsc), 2), driver_pay=round(pay, 2), fuel=round(fuel, 2),
             inspection=round(insp, 2), sub_pay=round(subpay, 2), sub_fsc=round(rev * inp.fsc, 2) if is_sub else 0.0,
             profit=round(profit, 2), profit_fsc=round(profit_fsc, 2),
             per_hour=round(rev / hrs, 2) if hrs else 0, per_hour_fsc=round(rev * (1 + inp.fsc) / hrs, 2) if hrs else 0,
-            margin_per_hour=round(profit / hrs, 2) if (hrs and is_sub) else None,
+            margin_per_hour=round((rev - subpay) / hrs, 2) if (hrs and is_sub) else None,
             drive_cap_h=drv["drive_cap"] / 60, duty_cap_h=drv["duty_cap"] / 60,
             meets_target=(rev / hrs >= inp.target) if hrs else False))
 
     unassigned = []
     for L in inp.loads:
         if id(L) not in assigned:
+            why = ""
+            if L.get("needs_gauger"): why = "needs a gauger — no driver who can gauge is working today"
+            elif L.get("gkey") and L["gkey"] not in gauged: why = "the gauge for this tank didn't fit in the gauger's day"
+            elif len(L.get("banned", [])) == n_veh: why = "every available driver/truck is barred from the pickup or drop-off"
+            elif L.get("banned"): why = f'{len(L["banned"])} driver(s) barred from this site'
             unassigned.append(dict(load_id=L["req"].id, unit=L["unit"], lane=f'{L["lane"].pickup.name} → {L["lane"].dropoff.name}',
                                    account=L["lane"].account or "", priority=L["priority"], rev=round(L["rev"], 2),
-                                   profit=round(L["rev"] - L["pay"], 2)))
+                                   profit=round(L["rev"] - L["pay"], 2), tank=L.get("tank"), why=why))
     used_shifts = [x for x in shifts if x["used"]]
-    own = [x for x in used_shifts if not x["is_sub"]]           # $/hr target is about our own trucks
+    own = [x for x in used_shifts if not x["is_sub"] or x["owned"]]   # $/hr target is about our own trucks (incl. Petrol-owned subs)
     own_hours = sum(x["duty_hours"] for x in own)
     tot_hours = sum(x["duty_hours"] for x in used_shifts)
     totals = dict(
         loads=sum(x["loads"] for x in used_shifts), drivers_used=len(used_shifts), drivers_available=len(shifts),
-        own_loads=sum(x["loads"] for x in own), sub_loads=sum(x["loads"] for x in used_shifts if x["is_sub"]),
+        own_loads=sum(x["loads"] for x in own), sub_loads=sum(x["loads"] for x in used_shifts if x["is_sub"] and not x["owned"]),
+        gauges=sum(x["gauges"] for x in used_shifts),
         revenue=round(sum(x["revenue"] for x in used_shifts), 2), revenue_fsc=round(sum(x["revenue_fsc"] for x in used_shifts), 2),
         driver_pay=round(sum(x["driver_pay"] for x in used_shifts), 2), fuel=round(sum(x["fuel"] for x in used_shifts), 2),
         inspection=round(sum(x["inspection"] for x in used_shifts), 2),
@@ -357,11 +446,11 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
     by_co = {}
     for x in used_shifts:
         key = x["company"] or "Petrol Transport (own trucks)"
-        c = by_co.setdefault(key, dict(company=key, is_sub=x["is_sub"], drivers=0, loads=0, bbl=0.0, revenue=0.0, sub_pay=0.0, sub_fsc=0.0, profit=0.0, hours=0.0))
+        c = by_co.setdefault(key, dict(company=key, is_sub=x["is_sub"], owned=x["owned"], drivers=0, loads=0, bbl=0.0, revenue=0.0, sub_pay=0.0, sub_fsc=0.0, profit=0.0, hours=0.0))
         c["drivers"] += 1; c["loads"] += x["loads"]; c["hours"] += x["duty_hours"]
         c["revenue"] += x["revenue"]; c["sub_pay"] += x["sub_pay"]; c["sub_fsc"] += x["sub_fsc"]; c["profit"] += x["profit"]
         c["bbl"] += sum(st.get("bbl", 0) for st in x["stops"] if st["kind"] == "dropoff")
-    by_company = sorted(by_co.values(), key=lambda c: (c["is_sub"], c["company"]))
+    by_company = sorted(by_co.values(), key=lambda c: (c["is_sub"] and not c["owned"], c["is_sub"], c["company"]))
     for c in by_company:
         for k in ("bbl", "revenue", "sub_pay", "sub_fsc", "profit", "hours"): c[k] = round(c[k], 2)
     return dict(ok=True, plan_date=plan_date, generated_at=datetime.utcnow().isoformat(timespec="seconds"),

@@ -19,9 +19,45 @@
   <div class="hint">Leave both blank if trucks can load / offload here any time.</div>
   <div class="row"><label>Max trucks at once</label><input type="number" name="max_trucks_at_once" value="{{ loc.max_trucks_at_once if loc and loc.max_trucks_at_once else '' }}"></div>
   <div class="hint">Blank = no limit. Set to 1 if trucks must queue behind each other here.</div>
+  <div class="row"><label>Requires gauging</label><input type="checkbox" name="requires_gauging" value="1" {% if loc and loc.requires_gauging %}checked{% endif %}></div>
+  <div class="hint">The first load from each tank here must be gauged (sample, API gravity, BS&amp;W) by a driver marked "can gauge" — either that driver hauls the first load, or gauges only and other drivers haul after. Add the tanks below so dispatchers can pick which tank a load comes from.</div>
   <div class="row"><label>Notes</label><textarea name="notes">{{ loc.notes if loc and loc.notes else '' }}</textarea></div>
   <p><button type="submit">Save</button> <a class="btn secondary" href="/locations">Back</a></p>
 </form>
+{% if loc %}
+<h2 id="tanks">Tanks at this location</h2>
+<div class="card">
+  {% if tanks %}
+  <table style="margin-bottom:8px"><tr><th>Tank</th><th>Notes</th><th></th></tr>
+  {% for tk in tanks %}<tr {% if not tk.active %}class="bad"{% endif %}><td>{{ tk.name }}{% if not tk.active %} <span class="muted">(retired)</span>{% endif %}</td><td class="muted">{{ tk.notes or '' }}</td>
+    <td><form method="post" action="/locations/{{ loc.id }}/tank" style="display:inline"><input type="hidden" name="tank_id" value="{{ tk.id }}"><button type="submit" name="action" value="delete" class="small secondary" onclick="return confirm('Remove tank {{ tk.name }}?')">✕</button></form></td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted" style="margin-top:0">No tanks listed. Only needed when a site has more than one tank and it matters which one a load comes from (gauging is per tank).</p>{% endif %}
+  <form method="post" action="/locations/{{ loc.id }}/tank" class="bar">
+    <input type="text" name="name" placeholder="tank name, e.g. Tank 2 or T-204" style="width:200px" required>
+    <input type="text" name="notes" placeholder="notes" style="width:200px">
+    <button type="submit" class="small">Add tank</button>
+  </form>
+</div>
+
+<h2 id="restrictions">Drivers / trucks that can't come here</h2>
+<div class="card">
+  {% if restr %}
+  <table style="margin-bottom:8px"><tr><th>Who</th><th>Reason</th><th></th></tr>
+  {% for r in restr %}<tr><td>{% if r.driver %}<b>{{ r.driver.name }}</b> <span class="muted">(driver)</span>{% else %}<b>truck {{ r.truck }}</b>{% endif %}</td><td class="muted">{{ r.reason or '' }}</td>
+    <td><form method="post" action="/locations/{{ loc.id }}/restriction" style="display:inline"><input type="hidden" name="rid" value="{{ r.id }}"><button type="submit" name="action" value="delete" class="small secondary" onclick="return confirm('Remove this restriction?')">✕</button></form></td></tr>{% endfor %}
+  </table>
+  {% else %}<p class="muted" style="margin-top:0">None. Add a driver (site training, access) or a truck (too tall, too long, too low) and the engine will never send them here.</p>{% endif %}
+  <form method="post" action="/locations/{{ loc.id }}/restriction" class="bar">
+    <select name="driver_id"><option value="">— driver —</option>{% for d in drivers %}<option value="{{ d.id }}">{{ d.name }}{% if d.is_sub %} ({{ d.company_short }}){% endif %}</option>{% endfor %}</select>
+    <span class="muted">or</span>
+    <input type="text" name="truck" list="trucklist" placeholder="truck #" class="w80"><datalist id="trucklist">{% for tk in trucks %}<option value="{{ tk }}">{% endfor %}</datalist>
+    <input type="text" name="reason" placeholder="reason (optional)" style="width:220px">
+    <button type="submit" class="small">Add restriction</button>
+  </form>
+</div>
+{% endif %}
+
 {% if loc and lanes %}
 <h2>Lanes using this location</h2>
 <div class="wrap"><table>
