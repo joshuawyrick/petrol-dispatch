@@ -138,7 +138,7 @@ def dashboard(request: Request, s: Session = Depends(get_db)):
 # ---------------- Settings ----------------
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, s: Session = Depends(get_db)):
-    rows = [r for r in s.query(Setting).order_by(Setting.sort).all() if not r.key.startswith("eia_")]
+    rows = [r for r in s.query(Setting).order_by(Setting.sort).all() if not r.key.startswith("eia_") and r.key != "drivers_imported"]
     info = {r.key: r.note for r in s.query(Setting).filter(Setting.key.like("eia_%")).all()}
     m = money_ctx(s)
     return render(request, "settings.html", rows=rows, info=info, fsc_pct=m["fsc"], has_eia_key=bool(os.environ.get("EIA_API_KEY")))

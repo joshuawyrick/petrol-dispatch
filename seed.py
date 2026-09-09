@@ -111,6 +111,11 @@ def seed(force: bool = False):
                 row.label, row.unit, row.note, row.sort = label, unit, note, i
         s.commit()
         ensure_companies(s)
+        # bring in the driver list (with companies and trucks) automatically, once; the Drivers page button re-runs it
+        if not s.get(Setting, "drivers_imported"):
+            print(import_drivers(s))
+            s.add(Setting(key="drivers_imported", value=1, label="Driver spreadsheet imported", unit="", note="internal flag", sort=999))
+            s.commit()
         if s.query(Location).count() and not force:
             return "already seeded"
         by_name = {}
