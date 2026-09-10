@@ -841,15 +841,23 @@ def loadlog_csv(from_: str = "", to: str = "", by: str = "plan", status: str = "
 async def loads_clear(request: Request, s: Session = Depends(get_db)):
     """Clear loads for a day range or a whole month. 'remove' keeps the records (restorable per day); 'wipe' deletes everything."""
     f = await request.form()
-    month = (f.get("month") or "").strip()                       # "2026-09" from a month picker
+    month = (f.get("month") or "").strip()                       # "2026-09" from a month picker (typed text in browsers without one)
+    from_, to = (f.get("from_") or "").strip(), (f.get("to") or "").strip()
     if month:
-        y, m = int(month[:4]), int(month[5:7])
+        ym = None
+        for fmt in ("%Y-%m", "%m/%Y", "%B %Y", "%b %Y", "%Y/%m", "%m-%Y"):
+            try: ym = datetime.strptime(month, fmt); break
+            except ValueError: pass
+        if not ym:
+            return RedirectResponse("/loads?msg=Month+not+understood+—+use+the+picker+or+type+it+as+2026-09", status_code=303)
+        y, m = ym.year, ym.month
         from_ = f"{y:04d}-{m:02d}-01"
         to = (date(y + (m == 12), (m % 12) + 1, 1) - timedelta(days=1)).isoformat()
     else:
-        from_, to = (f.get("from_") or "").strip(), (f.get("to") or "").strip() or (f.get("from_") or "").strip()
+        to = to or from_
     if not from_ or not to:
         return RedirectResponse("/loads?msg=Pick+a+day,+a+range+or+a+month+to+clear", status_code=303)
+    if to < from_: from_, to = to, from_
     mode = f.get("mode") or "remove"
     lines = s.query(LoadRequest).filter(LoadRequest.plan_date >= from_, LoadRequest.plan_date <= to).all()
     if mode == "wipe":
@@ -864,14 +872,33 @@ async def loads_clear(request: Request, s: Session = Depends(get_db)):
                 n_loads = s.query(Load).filter(Load.id.in_(load_ids)).delete(synchronize_session=False)
             s.query(LoadRequest).filter(LoadRequest.id.in_(ids)).delete(synchronize_session=False)
         s.query(Plan).filter(Plan.plan_date >= from_, Plan.plan_date <= to).delete(synchronize_session=False)
+        # keep standing orders from quietly re-adding themselves to the cleared days (each day shows a restore link instead)
+        markers = 0
+        if f.get("hold_standing", "1"):
+            d0, d1 = datetime.strptime(from_, "%Y-%m-%d").date(), datetime.strptime(to, "%Y-%m-%d").date()
+            sos = s.query(StandingOrder).filter(StandingOrder.active == True).all()
+            d = d0
+            while d <= d1 and (d1 - d0).days <= 62:
+                ds = d.isoformat(); wd = DAYS[d.weekday()]
+                for so in sos:
+                    if wd not in (so.days or "").split(","): continue
+                    if so.start_date and ds < so.start_date: continue
+                    if so.end_date and ds > so.end_date: continue
+                    s.add(LoadRequest(plan_date=ds, lane_id=so.lane_id, count=0, priority=urg.norm(so.priority), standing_order_id=so.id,
+                                      tank_id=so.tank_id, status="removed", notes=so.notes)); markers += 1
+                d += timedelta(days=1)
         s.commit()
-        return RedirectResponse(f"/loads?msg=Permanently+deleted+{len(ids)}+line(s)+/+{n_loads}+load(s)+and+their+plans+for+{from_}+to+{to}", status_code=303)
-    n = 0
+        msg = f"Permanently deleted {len(ids)} line(s) / {n_loads} load(s) and their plans for {from_} to {to}."
+        if markers: msg += " Standing orders are held off those days (use the day's restore link to put one back)."
+        return RedirectResponse(f"/loads?msg={msg}", status_code=303)
+    n = k = 0
     for l in lines:
         if l.status in ldm.LINE_OPEN and l.count:
-            n += l.count; ldm.remove_line(s, l, l.plan_date)
+            n += l.count; k += 1; ldm.remove_line(s, l, l.plan_date)
     s.commit()
-    return RedirectResponse(f"/loads?msg=Removed+{n}+open+load(s)+from+{from_}+to+{to}+(hauled/cancelled+records+kept;+each+day+can+restore+its+lines)", status_code=303)
+    msg = f"Removed {n} open load(s) on {k} line(s) from {from_} to {to}." if n else f"Nothing open to remove between {from_} and {to} — {len(lines)} line(s) there are already hauled / cancelled / removed."
+    if n: msg += " Hauled / cancelled records were kept; each day shows a restore link for its removed lines."
+    return RedirectResponse(f"/loads?msg={msg}", status_code=303)
 
 
 @app.get("/loads/{load_id}", response_class=HTMLResponse)

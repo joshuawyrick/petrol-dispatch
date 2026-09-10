@@ -15,7 +15,10 @@
     <label class="chk"><input type="radio" name="mode" value="wipe"> <b>Permanently delete everything</b> <span class="muted">— lines, loads, history and built plans in the range; for clearing test data</span></label>
     <input type="text" name="confirm" placeholder="type CLEAR" class="w80" style="width:110px">
   </div>
-  <div class="bar" style="margin-top:8px"><button type="submit" class="secondary">Clear</button> <span class="muted">A month picker wins over the day fields if both are filled. Standing orders are not touched — they'll re-add their loads the next time a day is opened.</span></div>
+  <div class="bar">
+    <label class="chk"><input type="checkbox" name="hold_standing" value="1" checked> Keep standing orders off the cleared days <span class="muted">— otherwise they re-add their loads the next time a day is opened</span></label>
+  </div>
+  <div class="bar" style="margin-top:8px"><button type="submit" class="secondary">Clear</button> <span class="muted">A month picker wins over the day fields if both are filled. Standing orders themselves are never changed.</span></div>
 </form>
 </details>
 {% endblock %}
@@ -65,7 +68,10 @@
     <label class="chk"><input type="radio" name="mode" value="wipe"> <b>Permanently delete everything</b> <span class="muted">— lines, loads, history and built plans in the range; for clearing test data</span></label>
     <input type="text" name="confirm" placeholder="type CLEAR" class="w80" style="width:110px">
   </div>
-  <div class="bar" style="margin-top:8px"><button type="submit" class="secondary">Clear</button> <span class="muted">A month picker wins over the day fields if both are filled. Standing orders are not touched — they'll re-add their loads the next time a day is opened.</span></div>
+  <div class="bar">
+    <label class="chk"><input type="checkbox" name="hold_standing" value="1" checked> Keep standing orders off the cleared days <span class="muted">— otherwise they re-add their loads the next time a day is opened</span></label>
+  </div>
+  <div class="bar" style="margin-top:8px"><button type="submit" class="secondary">Clear</button> <span class="muted">A month picker wins over the day fields if both are filled. Standing orders themselves are never changed.</span></div>
 </form>
 </details>
 {% endblock %}
