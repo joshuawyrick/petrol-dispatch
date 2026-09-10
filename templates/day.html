@@ -117,7 +117,7 @@
 {% endfor %}
 </table></div></details>
 {% endif %}
-{% if load_rows %}<div class="bar" style="margin-top:6px"><button type="submit" class="small">Save all load lines</button> <span class="muted">Priority saves itself the moment you change it. Counts, barrels, tanks, gauge, deadline, window, status and notes save with this button (or with any Move / ✕ click). <b>today</b> = has to move this day · <b>tomorrow</b> = by tomorrow · <b>flex</b> = within {{ flex_days }} days (Settings), getting more urgent as the deadline nears.</span></div>{% endif %}
+{% if load_rows %}<div class="bar" style="margin-top:6px"><button type="submit" class="small">Save all load lines</button> <a class="btn secondary small" href="/loads?clear_day={{ plan_date }}&from_={{ plan_date }}&to={{ plan_date }}" title="remove every open load from this day (or a range / month)">Clear loads…</a> <span class="muted">Priority saves itself the moment you change it. Counts, barrels, tanks, gauge, deadline, window, status and notes save with this button (or with any Move / ✕ click). <b>today</b> = has to move this day · <b>tomorrow</b> = by tomorrow · <b>flex</b> = within {{ flex_days }} days (Settings), getting more urgent as the deadline nears.</span></div>{% endif %}
 </form>
 
 <form method="post" action="/day/{{ plan_date }}/loads/add" class="addbar">

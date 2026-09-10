@@ -811,14 +811,14 @@ def _loadlog_query(s: Session, from_: str, to: str, by: str, status: str, q: str
 
 @app.get("/loads", response_class=HTMLResponse)
 def loadlog(request: Request, from_: str = "", to: str = "", by: str = "plan", status: str = "", q: str = "", line: int | None = None,
-            s: Session = Depends(get_db)):
+            clear_day: str = "", s: Session = Depends(get_db)):
     if not (from_ or to or line or status or q):
         from_ = (date.today() - timedelta(days=7)).isoformat()
     rows = _loadlog_query(s, from_, to, by, status, q, line)
     counts = {}
     for ld in rows: counts[ld.status] = counts.get(ld.status, 0) + 1
     qs = f"from_={from_}&to={to}&by={by}&status={status}&q={q}" + (f"&line={line}" if line else "")
-    return render(request, "loadlog.html", rows=rows, counts=counts, limit=LOG_LIMIT, qs=qs,
+    return render(request, "loadlog.html", rows=rows, counts=counts, limit=LOG_LIMIT, qs=qs, clear_day=clear_day,
                   q=dict(from_=from_, to=to, by=by, status=status, q=q))
 
 
@@ -834,6 +834,44 @@ def loadlog_csv(from_: str = "", to: str = "", by: str = "plan", status: str = "
         w.writerow([ld.ref, ld.lane.pickup.name, ld.lane.dropoff.name, ld.lane.account or "", ld.tank.name if ld.tank else "", ld.created_date,
                     ld.plan_date, ld.status, ld.outcome_date or "", drv, ld.outcome_note or "", ld.bbl_actual or ""])
     return Response(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="loads_{from_ or "all"}_{to or "all"}.csv"'})
+
+
+
+@app.post("/loads/clear")
+async def loads_clear(request: Request, s: Session = Depends(get_db)):
+    """Clear loads for a day range or a whole month. 'remove' keeps the records (restorable per day); 'wipe' deletes everything."""
+    f = await request.form()
+    month = (f.get("month") or "").strip()                       # "2026-09" from a month picker
+    if month:
+        y, m = int(month[:4]), int(month[5:7])
+        from_ = f"{y:04d}-{m:02d}-01"
+        to = (date(y + (m == 12), (m % 12) + 1, 1) - timedelta(days=1)).isoformat()
+    else:
+        from_, to = (f.get("from_") or "").strip(), (f.get("to") or "").strip() or (f.get("from_") or "").strip()
+    if not from_ or not to:
+        return RedirectResponse("/loads?msg=Pick+a+day,+a+range+or+a+month+to+clear", status_code=303)
+    mode = f.get("mode") or "remove"
+    lines = s.query(LoadRequest).filter(LoadRequest.plan_date >= from_, LoadRequest.plan_date <= to).all()
+    if mode == "wipe":
+        if (f.get("confirm") or "").strip().upper() != "CLEAR":
+            return RedirectResponse("/loads?msg=Type+CLEAR+in+the+confirm+box+to+permanently+delete", status_code=303)
+        ids = [l.id for l in lines]
+        n_loads = 0
+        if ids:
+            load_ids = [x.id for x in s.query(Load.id).filter(Load.line_id.in_(ids)).all()]
+            if load_ids:
+                s.query(LoadEvent).filter(LoadEvent.load_id.in_(load_ids)).delete(synchronize_session=False)
+                n_loads = s.query(Load).filter(Load.id.in_(load_ids)).delete(synchronize_session=False)
+            s.query(LoadRequest).filter(LoadRequest.id.in_(ids)).delete(synchronize_session=False)
+        s.query(Plan).filter(Plan.plan_date >= from_, Plan.plan_date <= to).delete(synchronize_session=False)
+        s.commit()
+        return RedirectResponse(f"/loads?msg=Permanently+deleted+{len(ids)}+line(s)+/+{n_loads}+load(s)+and+their+plans+for+{from_}+to+{to}", status_code=303)
+    n = 0
+    for l in lines:
+        if l.status in ldm.LINE_OPEN and l.count:
+            n += l.count; ldm.remove_line(s, l, l.plan_date)
+    s.commit()
+    return RedirectResponse(f"/loads?msg=Removed+{n}+open+load(s)+from+{from_}+to+{to}+(hauled/cancelled+records+kept;+each+day+can+restore+its+lines)", status_code=303)
 
 
 @app.get("/loads/{load_id}", response_class=HTMLResponse)

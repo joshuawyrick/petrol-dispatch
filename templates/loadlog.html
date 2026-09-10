@@ -1,5 +1,24 @@
 {% extends "base.html" %}
-{% block title %}Load Log{% endblock %}
+{% block title %}Load Log
+<details class="card" style="margin-top:18px" {% if clear_day %}open{% endif %}>
+<summary><b>Clear loads</b> <span class="muted">— wipe a day, a date range, or a whole month off the boards</span></summary>
+<form method="post" action="/loads/clear" style="margin-top:10px" onsubmit="return confirm('Clear loads for the chosen dates?')">
+  <div class="bar">
+    <label>day / from <input type="date" name="from_" value="{{ clear_day or '' }}"></label>
+    <label>to <input type="date" name="to" value="{{ clear_day or '' }}"></label>
+    <span class="muted">or whole month</span> <input type="month" name="month">
+  </div>
+  <div class="bar" style="margin-top:8px">
+    <label class="chk"><input type="radio" name="mode" value="remove" checked> <b>Remove open loads</b> <span class="muted">— hauled / cancelled / rejected records stay in the log; each day keeps a "restore" link</span></label>
+  </div>
+  <div class="bar">
+    <label class="chk"><input type="radio" name="mode" value="wipe"> <b>Permanently delete everything</b> <span class="muted">— lines, loads, history and built plans in the range; for clearing test data</span></label>
+    <input type="text" name="confirm" placeholder="type CLEAR" class="w80" style="width:110px">
+  </div>
+  <div class="bar" style="margin-top:8px"><button type="submit" class="secondary">Clear</button> <span class="muted">A month picker wins over the day fields if both are filled. Standing orders are not touched — they'll re-add their loads the next time a day is opened.</span></div>
+</form>
+</details>
+{% endblock %}
 {% block content %}
 <h1>Load Log</h1>
 <p class="muted">Every load ever entered, with its tracking number and what happened to it. Hauled loads show their completion date. Later the driver's ticket (BOL, barrels, times) attaches to the same number.</p>
@@ -30,4 +49,23 @@
 {% endfor %}
 {% if not rows %}<tr><td colspan="9" class="muted">Nothing matches. Loads appear here the moment they're added to a day.</td></tr>{% endif %}
 </table></div>
+
+<details class="card" style="margin-top:18px" {% if clear_day %}open{% endif %}>
+<summary><b>Clear loads</b> <span class="muted">— wipe a day, a date range, or a whole month off the boards</span></summary>
+<form method="post" action="/loads/clear" style="margin-top:10px" onsubmit="return confirm('Clear loads for the chosen dates?')">
+  <div class="bar">
+    <label>day / from <input type="date" name="from_" value="{{ clear_day or '' }}"></label>
+    <label>to <input type="date" name="to" value="{{ clear_day or '' }}"></label>
+    <span class="muted">or whole month</span> <input type="month" name="month">
+  </div>
+  <div class="bar" style="margin-top:8px">
+    <label class="chk"><input type="radio" name="mode" value="remove" checked> <b>Remove open loads</b> <span class="muted">— hauled / cancelled / rejected records stay in the log; each day keeps a "restore" link</span></label>
+  </div>
+  <div class="bar">
+    <label class="chk"><input type="radio" name="mode" value="wipe"> <b>Permanently delete everything</b> <span class="muted">— lines, loads, history and built plans in the range; for clearing test data</span></label>
+    <input type="text" name="confirm" placeholder="type CLEAR" class="w80" style="width:110px">
+  </div>
+  <div class="bar" style="margin-top:8px"><button type="submit" class="secondary">Clear</button> <span class="muted">A month picker wins over the day fields if both are filled. Standing orders are not touched — they'll re-add their loads the next time a day is opened.</span></div>
+</form>
+</details>
 {% endblock %}
