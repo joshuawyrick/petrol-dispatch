@@ -9,7 +9,7 @@ Model (Google OR-Tools routing solver):
   * site open/close windows and per-load pickup windows are honored; a driver may wait at a site for it to open
   * two drivers sharing a truck: the second cannot leave the yard until the first is back plus handoff time
   * objective: maximize profit = base revenue - driver pay - fuel, where fuel = miles / mpg x diesel price.
-    Leaving a load unhauled costs its profit ("must" loads cost far more, so they are only dropped when impossible).
+    Leaving a load unhauled costs its profit plus an urgency bonus that grows as its deadline nears; loads due today cost far more, so they are only dropped when impossible.
   * sub-hauler drivers: Petrol's take on a load is only its margin (load pay minus the sub's share), and the sub covers
     fuel, driver pay and inspections. Modelled as a per-vehicle cost on each drop-off equal to (sub's pay - what our own
     driver would have been paid), so the engine fills company trucks first and hands subs what's left — unless a sub's
@@ -23,11 +23,12 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from sqlalchemy.orm import Session, joinedload
 from db import Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, Company, CompanyLaneRate, LocationRestriction, Tank
 import fsc as fscmod
+import urgency as urg
 from mileage import haversine_miles, STRAIGHT_LINE_FACTOR
 
 HORIZON_MIN = 48 * 60          # plan clock runs from plan-date midnight for 48 hours (PM shifts cross midnight)
-MUST_PENALTY = 5_000_000       # cents — makes dropping a "must" load a last resort
-NORMAL_BONUS = 5_000           # cents — small nudge to haul "normal" loads over "flexible" ones at equal profit
+MUST_PENALTY = 5_000_000       # cents — makes dropping a "today" load a last resort
+URGENCY_BONUS = 5_000          # cents per day of urgency — a load due tomorrow is worth more to haul now than one due in 5 days
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
@@ -62,6 +63,7 @@ class DayInputs:
         self.inspection_cost = (st.get("inspection_minutes") or 45) / 60 * (st.get("min_wage") or 0)
         self.target = st.get("target_per_hour") or 135
         self.gauge_min = int(st.get("gauge_minutes") or 15)
+        self.flex_days = int(st.get("flex_days") or urg.DEFAULT_FLEX_DAYS)
         self.priority_step = (st.get("priority_step") if st.get("priority_step") is not None else 30) / 100.0   # share of a load's profit per tier step
         self.weekday = DAYS[datetime.strptime(plan_date, "%Y-%m-%d").weekday()]
 
@@ -114,11 +116,11 @@ class DayInputs:
             bbl = max(bbl, self.min_bbl)
             rev = lane.rate * bbl
             pay = (lane.driver_pay or 0) * bbl
-            pri = r.priority or "normal"
-            if r.must_go_by and r.must_go_by <= plan_date: pri = "must"
+            u = urg.urgency(r.must_go_by, r.priority, plan_date, self.flex_days)
+            pri, days_left = u["code"], u["days_left"]
             gauge = r.gauge or ("haul" if lane.pickup.requires_gauging else "none")
             for k in range(r.count or 1):
-                self.loads.append(dict(req=r, lane=lane, unit=k + 1, bbl=bbl, rev=rev, pay=pay, priority=pri,
+                self.loads.append(dict(req=r, lane=lane, unit=k + 1, bbl=bbl, rev=rev, pay=pay, priority=pri, days_left=days_left, deadline=u["deadline"],
                                        earliest=hm_to_min(r.earliest_pickup), latest=hm_to_min(r.latest_pickup),
                                        tank_id=r.tank_id, tank=(r.tank.name if r.tank else None), gauge=gauge,
                                        gkey=(lane.pickup_id, r.tank_id) if gauge != "none" else None))
@@ -273,7 +275,8 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
         solver.Add(routing.VehicleVar(pi) == routing.VehicleVar(di))
         solver.Add(time_dim.CumulVar(pi) <= time_dim.CumulVar(di))
         profit_cents = int(round((L["rev"] - L["pay"]) * 100))
-        pen = MUST_PENALTY if L["priority"] == "must" else profit_cents + (NORMAL_BONUS if L["priority"] == "normal" else 0)
+        # due today (or overdue): near-hard. Otherwise: its profit plus a bonus that grows as the deadline gets closer.
+        pen = MUST_PENALTY if L["days_left"] <= 0 else profit_cents + URGENCY_BONUS * max(0, inp.flex_days - L["days_left"])
         routing.AddDisjunction([pi], max(pen, 1))
         routing.AddDisjunction([di], 0)
         # per-load pickup window (today only)
@@ -368,7 +371,7 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
                 n_gauges += 1; gauged.add(nd["gkey"]); prev_node = node; idx = sol.Value(routing.NextVar(idx)); continue
             stop = dict(kind=nd["kind"], name=nd["loc"].name, loc_id=nd["loc"].id, arrive=arrive, depart=arrive + svc, miles=mi, drive_min=dm,
                         load_id=L["req"].id, unit=L["unit"], lane=f'{L["lane"].pickup.name} → {L["lane"].dropoff.name}',
-                        account=L["lane"].account or "", bbl=L["bbl"], priority=L["priority"], tank=L.get("tank"),
+                        account=L["lane"].account or "", bbl=L["bbl"], priority=L["priority"], deadline=L["deadline"], tank=L.get("tank"),
                         gauge=bool(L.get("is_gauge_load")) and nd["kind"] == "pickup")
             if nd["kind"] == "dropoff":
                 sp = inp.sub_pay(drv, L) if is_sub else 0.0
@@ -422,7 +425,7 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
             elif len(L.get("banned", [])) == n_veh: why = "every available driver/truck is barred from the pickup or drop-off"
             elif L.get("banned"): why = f'{len(L["banned"])} driver(s) barred from this site'
             unassigned.append(dict(load_id=L["req"].id, unit=L["unit"], lane=f'{L["lane"].pickup.name} → {L["lane"].dropoff.name}',
-                                   account=L["lane"].account or "", priority=L["priority"], rev=round(L["rev"], 2),
+                                   account=L["lane"].account or "", priority=L["priority"], deadline=L["deadline"], days_left=L["days_left"], rev=round(L["rev"], 2),
                                    profit=round(L["rev"] - L["pay"], 2), tank=L.get("tank"), why=why))
     used_shifts = [x for x in shifts if x["used"]]
     own = [x for x in used_shifts if not x["is_sub"] or x["owned"]]   # $/hr target is about our own trucks (incl. Petrol-owned subs)
@@ -440,7 +443,7 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
         hours=round(tot_hours, 2), own_hours=round(own_hours, 2), miles=round(sum(x["loaded_miles"] + x["empty_miles"] for x in used_shifts), 1),
         per_hour=round(sum(x["revenue"] for x in own) / own_hours, 2) if own_hours else 0,
         per_hour_fsc=round(sum(x["revenue_fsc"] for x in own) / own_hours, 2) if own_hours else 0,
-        unassigned=len(unassigned), unassigned_must=sum(1 for u in unassigned if u["priority"] == "must"),
+        unassigned=len(unassigned), unassigned_must=sum(1 for u in unassigned if u["priority"] == "today"),
         target=inp.target, fsc_pct=inp.fsc, diesel=inp.diesel, solver_seconds=time_limit_s)
     # per-company roll-up (what each sub is owed, and Petrol's margin on their loads)
     by_co = {}

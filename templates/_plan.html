@@ -35,7 +35,7 @@
   <tr class="stop-{{ st.kind }}">
     <td>{{ st.arrive|hm }}{% if st.kind != 'yard' %} – {{ st.depart|hm }}{% endif %}</td>
     <td>{% if st.kind == 'yard' %}<span class="muted">{{ 'Leave' if loop.first else 'Return' }} {{ st.name }}</span>{% elif st.kind == 'gauge' %}<span class="pill gauge">GAUGE ONLY</span> {{ st.name }}{% if st.tank %} · {{ st.tank }}{% endif %} <span class="muted">(sample, no load — others load after)</span>{% elif st.kind == 'pickup' %}<b>Load</b> at {{ st.name }}{% if st.tank %} <span class="muted">· {{ st.tank }}</span>{% endif %}{% if st.gauge %} <span class="pill gauge" title="first load from this tank: gauge it while loading">GAUGE</span>{% endif %}{% else %}<b>Offload</b> at {{ st.name }}{% endif %}</td>
-    <td class="muted">{% if st.kind not in ('yard', 'gauge') %}{{ st.lane }}{% if st.account %} · {{ st.account[:24] }}{% endif %}{% if st.priority == 'must' %} <span class="pri-must">MUST</span>{% endif %}{% endif %}</td>
+    <td class="muted">{% if st.kind not in ('yard', 'gauge') %}{{ st.lane }}{% if st.account %} · {{ st.account[:24] }}{% endif %}{% if st.priority == 'today' %} <span class="pri-today">TODAY</span>{% endif %}{% endif %}</td>
     <td class="num">{{ '%.0f'|format(st.miles) if st.miles else '' }}</td>
     <td>{% if st.leg_from is defined %}<a class="pill {{ 'approved' if st.leg_ok else 'review' }}" href="/route/{{ st.leg_from }}/{{ st.loc_id }}?back={{ ('/day/' ~ plan.plan_date ~ '#plan')|urlencode }}" title="{{ 'Approved route — click to view or change' if st.leg_ok else 'Route not reviewed yet — click to approve' }}">{{ 'approved' if st.leg_ok else 'review' }}</a>{% endif %}</td>
     <td class="num">{{ '%.0f'|format(st.bbl) if st.kind == 'dropoff' else '' }}</td>
@@ -66,8 +66,8 @@
 <div class="wrap"><table>
 <tr><th>Priority</th><th>Lane</th><th>Account</th><th class="num">Revenue</th><th class="num">Profit before fuel</th><th>Why</th></tr>
 {% for u in plan.unassigned %}
-<tr><td class="pri-{{ u.priority }}">{{ u.priority }}</td><td>{{ u.lane }}{% if u.tank %} <span class="muted">· {{ u.tank }}</span>{% endif %}</td><td class="muted">{{ u.account }}</td><td class="num">{{ u.rev|money }}</td><td class="num">{{ u.profit|money }}</td><td class="muted">{{ u.why or '' }}</td></tr>
+<tr><td class="pri-{{ u.priority }}">{{ 'OVERDUE' if u.days_left is defined and u.days_left < 0 else u.priority }}{% if u.priority == 'flex' %}<div class="th-sub muted">by {{ u.deadline[5:] }}</div>{% endif %}</td><td>{{ u.lane }}{% if u.tank %} <span class="muted">· {{ u.tank }}</span>{% endif %}</td><td class="muted">{{ u.account }}</td><td class="num">{{ u.rev|money }}</td><td class="num">{{ u.profit|money }}</td><td class="muted">{{ u.why or '' }}</td></tr>
 {% endfor %}
 </table></div>
-<p class="muted">These didn't fit in the available driver hours (or weren't worth the fuel). Options: add a driver, extend a start window, move a load to another day, or mark it flexible and rebuild.</p>
+<p class="muted">These didn't fit in the available driver hours (or weren't worth the fuel). Options: add a driver, extend a start window, or leave them — tomorrow's page will offer to bring them forward, and they get more urgent as their deadline nears.</p>
 {% endif %}

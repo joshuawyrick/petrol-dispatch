@@ -48,7 +48,8 @@ header.top .logout { color:#cfd8e6; text-decoration:none; font-size:12px; }
 td input[type=number], td input[type=time], td select, td input[type=text] { padding:4px 6px; }
 input.w60 { width:60px !important; min-width:0; } input.w80 { width:84px !important; min-width:0; }
 .tot { font-weight:700; background:#eef1f5; }
-.pri-must { color:#b00020; font-weight:700; } .pri-flexible { color:var(--muted); }
+.pri-must, .pri-today { color:#b00020; font-weight:700; } .pri-flexible, .pri-flex { color:var(--muted); } .pri-tomorrow { color:#8a6100; font-weight:600; }
+select.pri-today { color:#b00020; font-weight:700; } select.pri-tomorrow { color:#8a6100; } tr.overdue td { background:#fff0f0; }
 .ok-n { color:#1a7f37; } .bad-n { color:#b00020; }
 .shift { background:var(--card); border:1px solid var(--line); border-radius:8px; margin:10px 0; overflow:hidden; }
 .shift.unused { opacity:.6; }
@@ -71,7 +72,8 @@ h3 { font-size:15px; margin:18px 0 8px; }
 .toggle { font-size:12px; color:var(--muted); cursor:pointer; }
 td.detail, th.detail { display:none; }
 body.show-load-detail table.loads td.detail, body.show-load-detail table.loads th.detail { display:table-cell; }
-body.show-drv-detail table.drivers td.detail, body.show-drv-detail table.drivers th.detail { display:table-cell; }
+table.drivers td.detail, table.drivers th.detail { display:table-cell; }
+body.hide-drv-detail table.drivers td.detail, body.hide-drv-detail table.drivers th.detail { display:none; }
 input.w70 { width:70px !important; min-width:0; }
 .th-sub { font-weight:400; text-transform:none; font-size:11px; }
 .addbar { margin-top:10px; padding:10px 12px; background:#f8f9fb; border:1px dashed var(--line); border-radius:8px; }

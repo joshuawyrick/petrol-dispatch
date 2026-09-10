@@ -27,6 +27,7 @@ SETTINGS = [
     ("solver_seconds", 20, "Optimizer thinking time", "seconds", "Longer = slightly better plans; 10-60"),
     ("reset_after_hours", 80, "On-duty hours before a 34-hour reset", "hours", ""),
     ("reset_hours", 34, "Full reset length", "hours", ""),
+    ("flex_days", 5, "Flex loads must move within", "days", "A load marked 'flex' gets a deadline this many days out; as the deadline nears it gets more urgent, and on the day it becomes 'today'"),
     ("gauge_minutes", 15, "Time to gauge a tank", "minutes", "Sample + API gravity / BS&W; done while loading when the gauger hauls"),
     ("priority_step", 30, "Priority strength between company tiers", "% of load profit", "A load on a tier-2 company counts as this much worse than on tier 1 (tier 3 = double). 30 = fill tier 1 first unless it's a very bad fit; 90 = always"),
 ]

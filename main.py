@@ -15,6 +15,7 @@ from db import (SessionLocal, Setting, Location, Lane, Distance, Driver, DriverD
                 Company, CompanyLaneRate, Tank, LocationRestriction, init_db)
 from seed import seed, ensure_companies, import_drivers, petrol_company
 import mileage, fsc, optimizer, samsara, jmp
+import urgency as urg
 from fastapi.responses import Response
 import json
 
@@ -28,7 +29,7 @@ templates.env.filters["money"] = lambda v: f"${v:,.0f}"
 
 KINDS = ["pickup", "dropoff", "both", "yard"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-PRIORITIES = ["must", "normal", "flexible"]
+PRIORITIES = urg.PRIORITIES          # today | tomorrow | flex
 
 
 @app.on_event("startup")
@@ -681,6 +682,7 @@ async def driver_save(request: Request, s: Session = Depends(get_db)):
 def apply_standing_orders(s: Session, plan_date: str) -> int:
     """Create this day's loads from active standing orders (once per order per day). Returns how many were added."""
     weekday = DAYS[datetime.strptime(plan_date, "%Y-%m-%d").weekday()]
+    flex_days = int(settings_dict(s).get("flex_days") or urg.DEFAULT_FLEX_DAYS)
     done = {l.standing_order_id for l in s.query(LoadRequest).filter(LoadRequest.plan_date == plan_date,
                                                                       LoadRequest.standing_order_id != None).all()}
     n = 0
@@ -688,9 +690,10 @@ def apply_standing_orders(s: Session, plan_date: str) -> int:
         if so.id in done or weekday not in (so.days or "").split(","): continue
         if so.start_date and plan_date < so.start_date: continue
         if so.end_date and plan_date > so.end_date: continue
-        s.add(LoadRequest(plan_date=plan_date, lane_id=so.lane_id, count=so.count or 1, priority=so.priority or "normal",
-                          earliest_pickup=so.earliest_pickup, latest_pickup=so.latest_pickup, standing_order_id=so.id,
-                          notes=so.notes, tank_id=so.tank_id))
+        pri = urg.norm(so.priority)
+        s.add(LoadRequest(plan_date=plan_date, lane_id=so.lane_id, count=so.count or 1, priority=pri,
+                          must_go_by=urg.deadline_for(pri, plan_date, flex_days), earliest_pickup=so.earliest_pickup,
+                          latest_pickup=so.latest_pickup, standing_order_id=so.id, notes=so.notes, tank_id=so.tank_id))
         n += 1
     if n: s.commit()
     return n
@@ -737,13 +740,18 @@ def _day_ctx(s: Session, plan_date: str):
         tanks_by_loc.setdefault(tk.location_id, []).append(tk)
     gaugers_today = [r["d"].name for r in drv_rows if r["available"] and r["d"].can_gauge]
     needs_gauge = any(l.lane.pickup.requires_gauging or l.gauge in ("haul", "only") for l in loads)
-    loads.sort(key=lambda l: (PRIORITIES.index(l.priority or "normal"), l.lane.pickup.name))
+    flex_days = int(m["st"].get("flex_days") or urg.DEFAULT_FLEX_DAYS)
     load_rows = []
     tot = dict(count=0, rev=0.0, rev_fsc=0.0, pay=0.0)
     for l in loads:
         mm = lane_money(l.lane, m["min_bbl"], m["fsc"], bbl=l.bbl_override)
-        load_rows.append(dict(l=l, **mm))
+        load_rows.append(dict(l=l, u=urg.urgency(l.must_go_by, l.priority, plan_date, flex_days), **mm))
         tot["count"] += l.count; tot["rev"] += mm["rev"] * l.count; tot["rev_fsc"] += mm["rev_fsc"] * l.count; tot["pay"] += mm["pay"] * l.count
+    load_rows.sort(key=lambda r: (r["u"]["days_left"], r["l"].lane.pickup.name))
+    # open loads left on earlier days (not marked hauled/cancelled) — offer to bring them forward to this day
+    leftover = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup), joinedload(LoadRequest.lane).joinedload(Lane.dropoff)) \
+        .filter(LoadRequest.plan_date < plan_date, LoadRequest.plan_date >= (datetime.strptime(plan_date, "%Y-%m-%d").date() - timedelta(days=14)).isoformat(),
+                LoadRequest.status == "open").order_by(LoadRequest.plan_date).all()
     lanes_all = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).filter(Lane.active == True).all()
     lanes_all.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
     d0 = datetime.strptime(plan_date, "%Y-%m-%d").date()
@@ -754,7 +762,7 @@ def _day_ctx(s: Session, plan_date: str):
                 today=date.today().isoformat(), tomorrow=(date.today() + timedelta(days=1)).isoformat(),
                 weekday_long=d0.strftime("%A"), pretty_date=d0.strftime("%B %-d, %Y"), short_date=d0.strftime("%b %-d"), weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
-                avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"],
+                avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"], flex_days=flex_days, leftover=leftover,
                 has_samsara=bool(samsara.token()), tanks_by_loc=tanks_by_loc, gaugers_today=gaugers_today, needs_gauge=needs_gauge,
                 lane_tanks_json=json.dumps({ln.id: [[tk.id, tk.name] for tk in tanks_by_loc.get(ln.pickup_id, [])] for ln in lanes_all}),
                 lane_gauge_json=json.dumps({ln.id: bool(ln.pickup.requires_gauging) for ln in lanes_all}))
@@ -777,7 +785,7 @@ async def standing_save(request: Request, s: Session = Depends(get_db)):
     o = s.get(StandingOrder, int(f["id"])) if f.get("id") else StandingOrder()
     o.lane_id = int(f["lane_id"]); o.count = fint(f.get("count")) or 1
     o.days = ",".join(x for x in DAYS if f.get("d_" + x)) or None
-    o.priority = f.get("priority") or "normal"
+    o.priority = urg.norm(f.get("priority"))
     o.earliest_pickup = f.get("earliest_pickup") or None; o.latest_pickup = f.get("latest_pickup") or None
     o.start_date = f.get("start_date") or None; o.end_date = f.get("end_date") or None
     o.active = bool(f.get("active")); o.notes = f.get("notes") or None
@@ -823,8 +831,10 @@ async def day_drivers_save(request: Request, plan_date: str, s: Session = Depend
 @app.post("/day/{plan_date}/loads/add")
 async def day_load_add(request: Request, plan_date: str, s: Session = Depends(get_db)):
     f = await request.form()
+    pri = urg.norm(f.get("priority"))
+    flex_days = int(settings_dict(s).get("flex_days") or urg.DEFAULT_FLEX_DAYS)
     l = LoadRequest(plan_date=plan_date, lane_id=int(f["lane_id"]), count=fint(f.get("count")) or 1,
-                    priority=f.get("priority") or "normal", must_go_by=f.get("must_go_by") or None,
+                    priority=pri, must_go_by=f.get("must_go_by") or urg.deadline_for(pri, plan_date, flex_days),
                     earliest_pickup=f.get("earliest_pickup") or None, latest_pickup=f.get("latest_pickup") or None,
                     bbl_override=fnum(f.get("bbl_override")), notes=f.get("notes") or None,
                     tank_id=fint(f.get("tank_id")), gauge=f.get("gauge") or None)
@@ -832,28 +842,68 @@ async def day_load_add(request: Request, plan_date: str, s: Session = Depends(ge
     return RedirectResponse(f"/day/{plan_date}?msg=Load+added#loads", status_code=303)
 
 
+def _apply_load_row(s, l: LoadRequest, f, plan_date: str, flex_days: int, sfx: str = ""):
+    """Save one load line from the (single) loads form. Fields are suffixed with the load id."""
+    g = lambda k: f.get(k + sfx)
+    if g("count") is None: return False                     # this row wasn't in the form
+    l.count = fint(g("count")) or 1
+    new_pri = urg.norm(g("priority"))
+    posted_deadline = g("must_go_by") or None
+    if new_pri != urg.urgency(l.must_go_by, l.priority, plan_date, flex_days)["code"]:
+        l.must_go_by = urg.deadline_for(new_pri, plan_date, flex_days)     # the word was changed: it sets the deadline
+    elif posted_deadline is not None:
+        l.must_go_by = posted_deadline or l.must_go_by                     # otherwise a typed date wins
+    l.priority = new_pri
+    l.earliest_pickup = g("earliest_pickup") or None
+    l.latest_pickup = g("latest_pickup") or None
+    l.bbl_override = fnum(g("bbl_override"))
+    l.status = g("status") or l.status
+    l.notes = g("notes") or None
+    if g("tank_id") is not None: l.tank_id = fint(g("tank_id"))
+    if g("gauge") is not None: l.gauge = g("gauge") or None
+    return True
+
+
+@app.post("/day/{plan_date}/loads/save")
+async def day_loads_save(request: Request, plan_date: str, s: Session = Depends(get_db)):
+    """One Save for every load line on the day, so a change on one line is never lost by saving another."""
+    f = await request.form()
+    flex_days = int(settings_dict(s).get("flex_days") or urg.DEFAULT_FLEX_DAYS)
+    n = 0
+    for l in s.query(LoadRequest).filter(LoadRequest.plan_date == plan_date).all():
+        if _apply_load_row(s, l, f, plan_date, flex_days, f"_{l.id}"): n += 1
+    s.commit()
+    return RedirectResponse(f"/day/{plan_date}?msg=Loads+saved+({n}+lines)#loads", status_code=303)
+
+
+@app.post("/day/{plan_date}/loads/bring")
+async def day_loads_bring(request: Request, plan_date: str, s: Session = Depends(get_db)):
+    """Bring open loads from earlier days forward to this day (their deadlines stay, so they get more urgent)."""
+    f = await request.form()
+    ids = [int(x) for x in f.getlist("ids")]
+    n = 0
+    for l in s.query(LoadRequest).filter(LoadRequest.id.in_(ids)).all() if ids else []:
+        l.plan_date = plan_date; n += 1
+    s.commit()
+    return RedirectResponse(f"/day/{plan_date}?msg={n}+load+line(s)+brought+forward#loads", status_code=303)
+
+
 @app.post("/day/{plan_date}/loads/{load_id}")
 async def day_load_update(request: Request, plan_date: str, load_id: int, s: Session = Depends(get_db)):
+    """Per-line buttons (Move / Delete). The rest of the form is saved first so nothing typed is lost."""
     f = await request.form()
+    flex_days = int(settings_dict(s).get("flex_days") or urg.DEFAULT_FLEX_DAYS)
+    for l in s.query(LoadRequest).filter(LoadRequest.plan_date == plan_date).all():
+        _apply_load_row(s, l, f, plan_date, flex_days, f"_{l.id}")
     l = s.get(LoadRequest, load_id)
     action = f.get("action")
-    if action == "delete":
-        s.delete(l)
-    elif action == "move":
-        l.plan_date = f.get("new_date") or l.plan_date
-    else:
-        l.count = fint(f.get("count")) or 1
-        l.priority = f.get("priority") or "normal"
-        l.must_go_by = f.get("must_go_by") or None
-        l.earliest_pickup = f.get("earliest_pickup") or None
-        l.latest_pickup = f.get("latest_pickup") or None
-        l.bbl_override = fnum(f.get("bbl_override"))
-        l.status = f.get("status") or l.status
-        l.notes = f.get("notes") or None
-        if "tank_id" in f: l.tank_id = fint(f.get("tank_id"))
-        if "gauge" in f: l.gauge = f.get("gauge") or None
+    msg = "Updated"
+    if l and action == "delete":
+        s.delete(l); msg = "Removed"
+    elif l and action == "move":
+        l.plan_date = f.get("new_date") or l.plan_date; msg = f"Moved+to+{l.plan_date}"
     s.commit()
-    return RedirectResponse(f"/day/{plan_date}?msg=Updated#loads", status_code=303)
+    return RedirectResponse(f"/day/{plan_date}?msg={msg}#loads", status_code=303)
 
 
 @app.post("/day/{plan_date}/plan")
