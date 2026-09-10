@@ -134,3 +134,20 @@ def summary(s: Session, line: LoadRequest) -> dict:
     for ld in s.query(Load).filter(Load.line_id == line.id).all():
         out[ld.status] = out.get(ld.status, 0) + 1
     return out
+
+
+def restore_line(s: Session, line: LoadRequest, plan_date: str) -> int:
+    """Undo a ✕ on the day page: the line comes back with the loads that were removed with it."""
+    n = 0
+    for ld in s.query(Load).filter(Load.line_id == line.id, Load.status == "removed").order_by(Load.id).all():
+        ld.status = "open"; ld.outcome_date = None; ld.outcome_note = None
+        log(s, ld, "reopened", "line restored on the day page", plan_date); n += 1
+    line.status = "open"
+    s.flush()
+    line.count = len(open_loads(s, line))
+    if line.count == 0 and line.standing_order_id:            # nothing to bring back: rebuild from the standing order
+        so = line.standing_order if hasattr(line, "standing_order") else None
+        line.count = (so.count if so else 1) or 1
+        sync_line(s, line, plan_date, note="restored from standing order")
+        n = line.count
+    return n

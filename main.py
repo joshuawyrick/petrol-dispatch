@@ -742,7 +742,9 @@ def _day_ctx(s: Session, plan_date: str):
                              off_today=off_today, call=call, phone=(d.company.dispatch_phone if call else None)))
     all_lines = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup),
                                              joinedload(LoadRequest.lane).joinedload(Lane.dropoff), joinedload(LoadRequest.tank)) \
-        .filter(LoadRequest.plan_date == plan_date, LoadRequest.status.notin_(["cancelled", "removed"])).all()
+        .filter(LoadRequest.plan_date == plan_date, LoadRequest.status.notin_(["cancelled"])).all()
+    removed_lines = [l for l in all_lines if l.status == "removed"]
+    all_lines = [l for l in all_lines if l.status != "removed"]
     loads = [l for l in all_lines if l.status in ldm.LINE_OPEN]
     done_lines = [l for l in all_lines if l.status not in ldm.LINE_OPEN]
     sums = {l.id: ldm.summary(s, l) for l in all_lines}
@@ -777,7 +779,7 @@ def _day_ctx(s: Session, plan_date: str):
                 weekday_long=d0.strftime("%A"), pretty_date=d0.strftime("%B %-d, %Y"), short_date=d0.strftime("%b %-d"), weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
                 avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"], flex_days=flex_days, leftover=leftover,
-                done_rows=done_rows, active_drivers=active_drivers, last_sync=last_sync,
+                done_rows=done_rows, active_drivers=active_drivers, last_sync=last_sync, removed_lines=removed_lines,
                 has_samsara=bool(samsara.token()), tanks_by_loc=tanks_by_loc, gaugers_today=gaugers_today, needs_gauge=needs_gauge,
                 lane_tanks_json=json.dumps({ln.id: [[tk.id, tk.name] for tk in tanks_by_loc.get(ln.pickup_id, [])] for ln in lanes_all}),
                 lane_gauge_json=json.dumps({ln.id: bool(ln.pickup.requires_gauging) for ln in lanes_all}))
@@ -872,8 +874,29 @@ async def standing_save(request: Request, s: Session = Depends(get_db)):
     o.earliest_pickup = f.get("earliest_pickup") or None; o.latest_pickup = f.get("latest_pickup") or None
     o.start_date = f.get("start_date") or None; o.end_date = f.get("end_date") or None
     o.active = bool(f.get("active")); o.notes = f.get("notes") or None
-    s.add(o); s.commit()
-    return RedirectResponse("/standing?msg=Standing+order+saved.+It+will+appear+on+each+matching+day+the+first+time+that+day+is+opened.", status_code=303)
+    s.add(o); s.flush()
+    # push the change onto the day boards that already have this order's loads (today onward, only lines nobody has touched)
+    flex_days = int(settings_dict(s).get("flex_days") or urg.DEFAULT_FLEX_DAYS)
+    today = date.today().isoformat()
+    touched = 0
+    for line in s.query(LoadRequest).filter(LoadRequest.standing_order_id == o.id, LoadRequest.plan_date >= today,
+                                            LoadRequest.status.in_(ldm.LINE_OPEN)).all():
+        sm = ldm.summary(s, line)
+        if not o.active:
+            if not (sm.get("hauled") or sm.get("rejected") or sm.get("cancelled")):
+                ldm.remove_line(s, line, line.plan_date); touched += 1
+            continue
+        line.priority = o.priority
+        line.must_go_by = urg.deadline_for(o.priority, line.plan_date, flex_days)
+        line.earliest_pickup, line.latest_pickup, line.notes = o.earliest_pickup, o.latest_pickup, o.notes
+        if not (sm.get("hauled") or sm.get("rejected") or sm.get("cancelled")) and line.count != o.count:
+            line.count = o.count; ldm.sync_line(s, line, line.plan_date, note="standing order count changed")
+        touched += 1
+    s.commit()
+    msg = "Standing order saved."
+    if touched: msg += f" {touched} day board line(s) from today onward were updated to match."
+    msg += " New days pick it up the first time they are opened."
+    return RedirectResponse(f"/standing?msg={msg}", status_code=303)
 
 
 @app.post("/standing/{so_id}/delete")
@@ -988,6 +1011,15 @@ async def day_loads_bring(request: Request, plan_date: str, s: Session = Depends
         n += ldm.move(s, l, l.count, plan_date, plan_date)
     s.commit()
     return RedirectResponse(f"/day/{plan_date}?msg={n}+load(s)+brought+forward#loads", status_code=303)
+
+
+@app.post("/day/{plan_date}/loads/{load_id}/restore")
+def day_load_restore(plan_date: str, load_id: int, s: Session = Depends(get_db)):
+    l = s.get(LoadRequest, load_id)
+    if not l or l.status != "removed":
+        return RedirectResponse(f"/day/{plan_date}?msg=Nothing+to+restore#loads", status_code=303)
+    n = ldm.restore_line(s, l, plan_date); s.commit()
+    return RedirectResponse(f"/day/{plan_date}?msg=Restored+{n}+load(s)+on+{l.lane.pickup.name}#loads", status_code=303)
 
 
 @app.post("/day/{plan_date}/loads/{load_id}")

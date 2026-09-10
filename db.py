@@ -242,6 +242,7 @@ class LoadRequest(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     lane = relationship("Lane")
     tank = relationship("Tank")
+    standing_order = relationship("StandingOrder")
 
 
 class Load(Base):

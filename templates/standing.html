@@ -32,7 +32,7 @@
   <select name="lane_id" required style="max-width:420px"><option value="">— choose lane —</option>{% for ln in lanes_all %}<option value="{{ ln.id }}">{{ ln.pickup.name }} → {{ ln.dropoff.name }}{% if ln.account %} ({{ ln.account[:22] }}){% endif %}</option>{% endfor %}</select>
   <label>loads/day <input type="number" name="count" class="w60" min="1" value="1"></label>
   <span style="white-space:nowrap">{% for d in days %}<label style="margin-right:4px"><input type="checkbox" name="d_{{ d }}" value="1" checked>{{ d[:2] }}</label>{% endfor %}</span>
-  <select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if p=='tomorrow' %}selected{% endif %}>{{ p }}</option>{% endfor %}</select>
+  <select name="priority">{% for p in priorities %}<option value="{{ p }}" {% if p=='today' %}selected{% endif %}>{{ p }}</option>{% endfor %}</select>
   <label>window <input type="time" name="earliest_pickup"> – <input type="time" name="latest_pickup"></label>
   <label>from <input type="date" name="start_date"></label> <label>until <input type="date" name="end_date"></label>
   <input type="text" name="notes" placeholder="notes (PO #, tank…)" style="min-width:140px">

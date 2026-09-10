@@ -100,6 +100,12 @@
 {% endif %}
 </table></div>
 <input type="hidden" name="new_date" id="new_date" value="">
+{% if removed_lines %}
+<div class="muted" style="margin-top:8px">Removed from this day:
+  {% for l in removed_lines %}<span class="removed-line">{{ l.lane.pickup.name }} → {{ l.lane.dropoff.name }}{% if l.standing_order_id %} <span class="pill" title="standing order">daily</span>{% endif %}
+    <form method="post" action="/day/{{ plan_date }}/loads/{{ l.id }}/restore" style="display:inline"><button type="submit" class="small secondary">restore</button></form></span>{% endfor %}
+</div>
+{% endif %}
 {% if done_rows %}
 <details style="margin-top:8px"><summary class="muted">{{ done_rows|length }} line{{ 's' if done_rows|length != 1 }} finished on this day (all loads hauled / cancelled / rejected)</summary>
 <div class="wrap"><table>
