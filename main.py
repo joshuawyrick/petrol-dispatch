@@ -12,10 +12,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 from db import (SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, StandingOrder, CompanyInfo, JmpDoc,
-                Company, CompanyLaneRate, Tank, LocationRestriction, init_db)
+                Company, CompanyLaneRate, Tank, LocationRestriction, Load, LoadEvent, init_db)
 from seed import seed, ensure_companies, import_drivers, petrol_company
 import mileage, fsc, optimizer, samsara, jmp
 import urgency as urg
+import loads as ldm
 from fastapi.responses import Response
 import json
 
@@ -36,6 +37,9 @@ PRIORITIES = urg.PRIORITIES          # today | tomorrow | flex
 def _startup():
     init_db()
     print("seed:", seed())
+    with SessionLocal() as s0:
+        n = ldm.sync_all(s0)
+        if n: print(f"load tracking: created tracking rows for {n} existing load line(s)")
 
 
 # ---------------- login ----------------
@@ -385,6 +389,7 @@ def _after_approve(s, back: str, msg: str, rebuild: bool):
         res = optimizer.solve(s, pd)
         if res.get("ok"):
             optimizer.save_plan(s, res)
+            ldm.record_plan(s, res); s.commit()
             t = res["totals"]
             msg += f". Plan rebuilt: {t['loads']} loads on {t['drivers_used']} drivers"
             if t["unassigned"]: msg += f", {t['unassigned']} not fitted"
@@ -691,9 +696,11 @@ def apply_standing_orders(s: Session, plan_date: str) -> int:
         if so.start_date and plan_date < so.start_date: continue
         if so.end_date and plan_date > so.end_date: continue
         pri = urg.norm(so.priority)
-        s.add(LoadRequest(plan_date=plan_date, lane_id=so.lane_id, count=so.count or 1, priority=pri,
-                          must_go_by=urg.deadline_for(pri, plan_date, flex_days), earliest_pickup=so.earliest_pickup,
-                          latest_pickup=so.latest_pickup, standing_order_id=so.id, notes=so.notes, tank_id=so.tank_id))
+        line = LoadRequest(plan_date=plan_date, lane_id=so.lane_id, count=so.count or 1, priority=pri,
+                           must_go_by=urg.deadline_for(pri, plan_date, flex_days), earliest_pickup=so.earliest_pickup,
+                           latest_pickup=so.latest_pickup, standing_order_id=so.id, notes=so.notes, tank_id=so.tank_id)
+        s.add(line); s.flush()
+        ldm.sync_line(s, line, plan_date, note=f"standing order for {plan_date}")
         n += 1
     if n: s.commit()
     return n
@@ -732,9 +739,12 @@ def _day_ctx(s: Session, plan_date: str):
         call = d.is_sub and not d.company.has_samsara          # no Samsara: dispatch phones the sub for hours
         drv_rows.append(dict(d=d, x=x, available=(x.available if x else not off_today), shift=(x.shift if x else (d.usual_shift or "AM")),
                              off_today=off_today, call=call, phone=(d.company.dispatch_phone if call else None)))
-    loads = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup),
-                                         joinedload(LoadRequest.lane).joinedload(Lane.dropoff), joinedload(LoadRequest.tank)) \
-        .filter(LoadRequest.plan_date == plan_date, LoadRequest.status != "cancelled").all()
+    all_lines = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup),
+                                             joinedload(LoadRequest.lane).joinedload(Lane.dropoff), joinedload(LoadRequest.tank)) \
+        .filter(LoadRequest.plan_date == plan_date, LoadRequest.status.notin_(["cancelled", "removed"])).all()
+    loads = [l for l in all_lines if l.status in ldm.LINE_OPEN]
+    done_lines = [l for l in all_lines if l.status not in ldm.LINE_OPEN]
+    sums = {l.id: ldm.summary(s, l) for l in all_lines}
     tanks_by_loc = {}
     for tk in s.query(Tank).filter(Tank.active == True).order_by(Tank.name).all():
         tanks_by_loc.setdefault(tk.location_id, []).append(tk)
@@ -745,13 +755,15 @@ def _day_ctx(s: Session, plan_date: str):
     tot = dict(count=0, rev=0.0, rev_fsc=0.0, pay=0.0)
     for l in loads:
         mm = lane_money(l.lane, m["min_bbl"], m["fsc"], bbl=l.bbl_override)
-        load_rows.append(dict(l=l, u=urg.urgency(l.must_go_by, l.priority, plan_date, flex_days), **mm))
+        load_rows.append(dict(l=l, u=urg.urgency(l.must_go_by, l.priority, plan_date, flex_days), sm=sums.get(l.id, {}), **mm))
         tot["count"] += l.count; tot["rev"] += mm["rev"] * l.count; tot["rev_fsc"] += mm["rev_fsc"] * l.count; tot["pay"] += mm["pay"] * l.count
     load_rows.sort(key=lambda r: (r["u"]["days_left"], r["l"].lane.pickup.name))
     # open loads left on earlier days (not marked hauled/cancelled) — offer to bring them forward to this day
     leftover = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup), joinedload(LoadRequest.lane).joinedload(Lane.dropoff)) \
         .filter(LoadRequest.plan_date < plan_date, LoadRequest.plan_date >= (datetime.strptime(plan_date, "%Y-%m-%d").date() - timedelta(days=14)).isoformat(),
-                LoadRequest.status == "open").order_by(LoadRequest.plan_date).all()
+                LoadRequest.status.in_(ldm.LINE_OPEN), LoadRequest.count > 0).order_by(LoadRequest.plan_date).all()
+    done_rows = [dict(l=l, sm=sums.get(l.id, {})) for l in done_lines]
+    active_drivers = sorted(s.query(Driver).filter(Driver.active == True).all(), key=lambda d: d.name)
     lanes_all = s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).filter(Lane.active == True).all()
     lanes_all.sort(key=lambda l: (l.pickup.name, l.dropoff.name))
     d0 = datetime.strptime(plan_date, "%Y-%m-%d").date()
@@ -763,9 +775,78 @@ def _day_ctx(s: Session, plan_date: str):
                 weekday_long=d0.strftime("%A"), pretty_date=d0.strftime("%B %-d, %Y"), short_date=d0.strftime("%b %-d"), weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
                 avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"], flex_days=flex_days, leftover=leftover,
+                done_rows=done_rows, active_drivers=active_drivers,
                 has_samsara=bool(samsara.token()), tanks_by_loc=tanks_by_loc, gaugers_today=gaugers_today, needs_gauge=needs_gauge,
                 lane_tanks_json=json.dumps({ln.id: [[tk.id, tk.name] for tk in tanks_by_loc.get(ln.pickup_id, [])] for ln in lanes_all}),
                 lane_gauge_json=json.dumps({ln.id: bool(ln.pickup.requires_gauging) for ln in lanes_all}))
+
+
+
+# ---------------- Load Log (every load, its tracking number and history) ----------------
+LOG_LIMIT = 1000
+
+
+def _loadlog_query(s: Session, from_: str, to: str, by: str, status: str, q: str, line: int | None):
+    qry = s.query(Load).options(joinedload(Load.lane).joinedload(Lane.pickup), joinedload(Load.lane).joinedload(Lane.dropoff),
+                                joinedload(Load.tank), joinedload(Load.planned_driver), joinedload(Load.hauled_by))
+    if line: qry = qry.filter(Load.line_id == line)
+    col = {"created": Load.created_date, "outcome": Load.outcome_date}.get(by, Load.plan_date)
+    if from_: qry = qry.filter(col >= from_)
+    if to: qry = qry.filter(col <= to)
+    if status: qry = qry.filter(Load.status == status)
+    rows = qry.order_by(Load.id.desc()).limit(LOG_LIMIT).all()
+    if q:
+        ql = q.lower()
+        def hit(ld):
+            hay = " ".join([ld.lane.pickup.name, ld.lane.dropoff.name, ld.lane.account or "", ld.outcome_note or "", ld.ref,
+                            ld.planned_driver.name if ld.planned_driver else "", ld.hauled_by.name if ld.hauled_by else ""]).lower()
+            return ql in hay
+        rows = [ld for ld in rows if hit(ld)]
+    return rows
+
+
+@app.get("/loads", response_class=HTMLResponse)
+def loadlog(request: Request, from_: str = "", to: str = "", by: str = "plan", status: str = "", q: str = "", line: int | None = None,
+            s: Session = Depends(get_db)):
+    if not (from_ or to or line or status or q):
+        from_ = (date.today() - timedelta(days=7)).isoformat()
+    rows = _loadlog_query(s, from_, to, by, status, q, line)
+    counts = {}
+    for ld in rows: counts[ld.status] = counts.get(ld.status, 0) + 1
+    qs = f"from_={from_}&to={to}&by={by}&status={status}&q={q}" + (f"&line={line}" if line else "")
+    return render(request, "loadlog.html", rows=rows, counts=counts, limit=LOG_LIMIT, qs=qs,
+                  q=dict(from_=from_, to=to, by=by, status=status, q=q))
+
+
+@app.get("/loads.csv")
+def loadlog_csv(from_: str = "", to: str = "", by: str = "plan", status: str = "", q: str = "", line: int | None = None,
+                s: Session = Depends(get_db)):
+    import csv, io
+    rows = _loadlog_query(s, from_, to, by, status, q, line)
+    buf = io.StringIO(); w = csv.writer(buf)
+    w.writerow(["tracking", "pickup", "dropoff", "account", "tank", "entered", "planned_for", "status", "outcome_date", "driver", "note", "bbl_actual"])
+    for ld in rows:
+        drv = ld.hauled_by.name if ld.hauled_by else (ld.planned_driver.name if ld.planned_driver else "")
+        w.writerow([ld.ref, ld.lane.pickup.name, ld.lane.dropoff.name, ld.lane.account or "", ld.tank.name if ld.tank else "", ld.created_date,
+                    ld.plan_date, ld.status, ld.outcome_date or "", drv, ld.outcome_note or "", ld.bbl_actual or ""])
+    return Response(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="loads_{from_ or "all"}_{to or "all"}.csv"'})
+
+
+@app.get("/loads/{load_id}", response_class=HTMLResponse)
+def load_detail(request: Request, load_id: int, s: Session = Depends(get_db)):
+    ld = s.get(Load, load_id)
+    if not ld: return RedirectResponse("/loads?msg=No+such+load", status_code=303)
+    events = s.query(LoadEvent).filter(LoadEvent.load_id == load_id).order_by(LoadEvent.at, LoadEvent.id).all()
+    return render(request, "load_detail.html", ld=ld, events=events)
+
+
+@app.post("/loads/{load_id}/reopen")
+def load_reopen(load_id: int, s: Session = Depends(get_db)):
+    ld = s.get(Load, load_id)
+    if ld and ld.status != "open":
+        ldm.reopen(s, ld, ld.plan_date); s.commit()
+        return RedirectResponse(f"/loads/{load_id}?msg={ld.ref}+is+open+again+on+{ld.plan_date}", status_code=303)
+    return RedirectResponse(f"/loads/{load_id}", status_code=303)
 
 
 # ---------------- Standing orders (recurring daily loads) ----------------
@@ -838,7 +919,9 @@ async def day_load_add(request: Request, plan_date: str, s: Session = Depends(ge
                     earliest_pickup=f.get("earliest_pickup") or None, latest_pickup=f.get("latest_pickup") or None,
                     bbl_override=fnum(f.get("bbl_override")), notes=f.get("notes") or None,
                     tank_id=fint(f.get("tank_id")), gauge=f.get("gauge") or None)
-    s.add(l); s.commit()
+    s.add(l); s.flush()
+    ldm.sync_line(s, l, plan_date)
+    s.commit()
     return RedirectResponse(f"/day/{plan_date}?msg=Load+added#loads", status_code=303)
 
 
@@ -861,6 +944,8 @@ def _apply_load_row(s, l: LoadRequest, f, plan_date: str, flex_days: int, sfx: s
     l.notes = g("notes") or None
     if g("tank_id") is not None: l.tank_id = fint(g("tank_id"))
     if g("gauge") is not None: l.gauge = g("gauge") or None
+    if l.status == "done" and l.count > 0: l.status = "open"        # count typed back in on a finished line
+    ldm.sync_line(s, l, plan_date)
     return True
 
 
@@ -870,7 +955,7 @@ async def day_loads_save(request: Request, plan_date: str, s: Session = Depends(
     f = await request.form()
     flex_days = int(settings_dict(s).get("flex_days") or urg.DEFAULT_FLEX_DAYS)
     n = 0
-    for l in s.query(LoadRequest).filter(LoadRequest.plan_date == plan_date).all():
+    for l in s.query(LoadRequest).filter(LoadRequest.plan_date == plan_date, LoadRequest.status.in_(ldm.LINE_OPEN)).all():
         if _apply_load_row(s, l, f, plan_date, flex_days, f"_{l.id}"): n += 1
     s.commit()
     return RedirectResponse(f"/day/{plan_date}?msg=Loads+saved+({n}+lines)#loads", status_code=303)
@@ -880,12 +965,27 @@ async def day_loads_save(request: Request, plan_date: str, s: Session = Depends(
 async def day_loads_bring(request: Request, plan_date: str, s: Session = Depends(get_db)):
     """Bring open loads from earlier days forward to this day (their deadlines stay, so they get more urgent)."""
     f = await request.form()
+    action = f.get("action") or "bring"
+    if action.startswith("haul_") or action.startswith("cancel_"):
+        kind, lid = action.split("_", 1)
+        l = s.get(LoadRequest, int(lid))
+        if l:
+            note = (f.get(f"why_{l.id}") or "").strip()
+            if kind == "haul":
+                k = ldm.resolve(s, l, l.count, "hauled", l.plan_date, note, plan_date)
+                msg = f"{k} load(s) marked hauled on {l.plan_date}"
+            else:
+                k = ldm.resolve(s, l, l.count, "cancelled", date.today().isoformat(), note or "left unhauled", plan_date)
+                msg = f"{k} load(s) cancelled"
+        else: msg = "Line not found"
+        s.commit()
+        return RedirectResponse(f"/day/{plan_date}?msg={msg}#loads", status_code=303)
     ids = [int(x) for x in f.getlist("ids")]
     n = 0
     for l in s.query(LoadRequest).filter(LoadRequest.id.in_(ids)).all() if ids else []:
-        l.plan_date = plan_date; n += 1
+        n += ldm.move(s, l, l.count, plan_date, plan_date)
     s.commit()
-    return RedirectResponse(f"/day/{plan_date}?msg={n}+load+line(s)+brought+forward#loads", status_code=303)
+    return RedirectResponse(f"/day/{plan_date}?msg={n}+load(s)+brought+forward#loads", status_code=303)
 
 
 @app.post("/day/{plan_date}/loads/{load_id}")
@@ -893,15 +993,29 @@ async def day_load_update(request: Request, plan_date: str, load_id: int, s: Ses
     """Per-line buttons (Move / Delete). The rest of the form is saved first so nothing typed is lost."""
     f = await request.form()
     flex_days = int(settings_dict(s).get("flex_days") or urg.DEFAULT_FLEX_DAYS)
-    for l in s.query(LoadRequest).filter(LoadRequest.plan_date == plan_date).all():
+    for l in s.query(LoadRequest).filter(LoadRequest.plan_date == plan_date, LoadRequest.status.in_(ldm.LINE_OPEN)).all():
         _apply_load_row(s, l, f, plan_date, flex_days, f"_{l.id}")
     l = s.get(LoadRequest, load_id)
     action = f.get("action")
     msg = "Updated"
     if l and action == "delete":
-        s.delete(l); msg = "Removed"
+        ldm.remove_line(s, l, plan_date); msg = "Removed (kept in the load log)"
     elif l and action == "move":
-        l.plan_date = f.get("new_date") or l.plan_date; msg = f"Moved+to+{l.plan_date}"
+        n = fint(f.get("move_n" + f"_{l.id}")) or l.count
+        moved = ldm.move(s, l, n, f.get("new_date") or l.plan_date, plan_date)
+        msg = f"{moved} load(s) moved to {f.get('new_date')}" if moved else "Nothing moved"
+    elif l and action == "outcome":
+        kind = f.get(f"oc_kind_{l.id}") or "hauled"
+        n = fint(f.get(f"oc_n_{l.id}")) or l.count
+        when = f.get(f"oc_date_{l.id}") or plan_date
+        note = (f.get(f"oc_note_{l.id}") or "").strip()
+        drv = fint(f.get(f"oc_driver_{l.id}"))
+        if kind == "moved":
+            moved = ldm.move(s, l, n, when, plan_date)
+            msg = f"{moved} load(s) moved to {when}"
+        else:
+            k = ldm.resolve(s, l, n, kind, when, note, plan_date, drv)
+            msg = f"{k} load(s) marked {kind}" + (f" on {when}" if kind == "hauled" else "")
     s.commit()
     return RedirectResponse(f"/day/{plan_date}?msg={msg}#loads", status_code=303)
 
@@ -912,6 +1026,7 @@ def day_plan(plan_date: str, s: Session = Depends(get_db)):
     if not res.get("ok"):
         return RedirectResponse(f"/day/{plan_date}?msg={res['error']}", status_code=303)
     optimizer.save_plan(s, res)
+    ldm.record_plan(s, res); s.commit()
     t = res["totals"]
     msg = f"Plan built: {t['loads']} loads on {t['drivers_used']} drivers, ${t['revenue']:,.0f} base revenue, ${t['per_hour']:,.0f}/hr"
     if t["unassigned"]: msg += f" — {t['unassigned']} load(s) could not be fitted" + (f" ({t['unassigned_must']} MUST)" if t["unassigned_must"] else "")

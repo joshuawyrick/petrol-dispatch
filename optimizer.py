@@ -21,7 +21,7 @@ import json, math
 from datetime import datetime, timedelta
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 from sqlalchemy.orm import Session, joinedload
-from db import Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, Company, CompanyLaneRate, LocationRestriction, Tank
+from db import Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, Company, CompanyLaneRate, LocationRestriction, Tank, Load
 import fsc as fscmod
 import urgency as urg
 from mileage import haversine_miles, STRAIGHT_LINE_FACTOR
@@ -108,6 +108,9 @@ class DayInputs:
         reqs = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup),
                                             joinedload(LoadRequest.lane).joinedload(Lane.dropoff)) \
             .filter(LoadRequest.plan_date == plan_date, LoadRequest.status.in_(["open", "planned"])).all()
+        rows_by_line = {}
+        for ld in s.query(Load).filter(Load.plan_date == plan_date, Load.status == "open").order_by(Load.id).all():
+            rows_by_line.setdefault(ld.line_id, []).append(ld)
         self.loads = []
         for r in reqs:
             lane = r.lane
@@ -119,8 +122,11 @@ class DayInputs:
             u = urg.urgency(r.must_go_by, r.priority, plan_date, self.flex_days)
             pri, days_left = u["code"], u["days_left"]
             gauge = r.gauge or ("haul" if lane.pickup.requires_gauging else "none")
+            rows = rows_by_line.get(r.id, [])
             for k in range(r.count or 1):
+                row = rows[k] if k < len(rows) else None
                 self.loads.append(dict(req=r, lane=lane, unit=k + 1, bbl=bbl, rev=rev, pay=pay, priority=pri, days_left=days_left, deadline=u["deadline"],
+                                       load_row_id=(row.id if row else None), ref=(row.ref if row else f"#{r.id}-{k + 1}"),
                                        earliest=hm_to_min(r.earliest_pickup), latest=hm_to_min(r.latest_pickup),
                                        tank_id=r.tank_id, tank=(r.tank.name if r.tank else None), gauge=gauge,
                                        gkey=(lane.pickup_id, r.tank_id) if gauge != "none" else None))
@@ -370,7 +376,7 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
                                   tank=nd.get("tank"), lane="", account="", priority=""))
                 n_gauges += 1; gauged.add(nd["gkey"]); prev_node = node; idx = sol.Value(routing.NextVar(idx)); continue
             stop = dict(kind=nd["kind"], name=nd["loc"].name, loc_id=nd["loc"].id, arrive=arrive, depart=arrive + svc, miles=mi, drive_min=dm,
-                        load_id=L["req"].id, unit=L["unit"], lane=f'{L["lane"].pickup.name} → {L["lane"].dropoff.name}',
+                        load_id=L["req"].id, unit=L["unit"], load_row_id=L["load_row_id"], ref=L["ref"], lane=f'{L["lane"].pickup.name} → {L["lane"].dropoff.name}',
                         account=L["lane"].account or "", bbl=L["bbl"], priority=L["priority"], deadline=L["deadline"], tank=L.get("tank"),
                         gauge=bool(L.get("is_gauge_load")) and nd["kind"] == "pickup")
             if nd["kind"] == "dropoff":
@@ -424,7 +430,7 @@ def solve(s: Session, plan_date: str, time_limit_s: int | None = None) -> dict:
             elif L.get("gkey") and L["gkey"] not in gauged: why = "the gauge for this tank didn't fit in the gauger's day"
             elif len(L.get("banned", [])) == n_veh: why = "every available driver/truck is barred from the pickup or drop-off"
             elif L.get("banned"): why = f'{len(L["banned"])} driver(s) barred from this site'
-            unassigned.append(dict(load_id=L["req"].id, unit=L["unit"], lane=f'{L["lane"].pickup.name} → {L["lane"].dropoff.name}',
+            unassigned.append(dict(load_id=L["req"].id, unit=L["unit"], load_row_id=L["load_row_id"], ref=L["ref"], lane=f'{L["lane"].pickup.name} → {L["lane"].dropoff.name}',
                                    account=L["lane"].account or "", priority=L["priority"], deadline=L["deadline"], days_left=L["days_left"], rev=round(L["rev"], 2),
                                    profit=round(L["rev"] - L["pay"], 2), tank=L.get("tank"), why=why))
     used_shifts = [x for x in shifts if x["used"]]

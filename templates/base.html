@@ -15,6 +15,7 @@
     <a href="/lanes" {% if request.url.path.startswith('/lanes') %}class="on"{% endif %}>Lanes</a>
     <a href="/day" {% if request.url.path.startswith('/day') %}class="on"{% endif %}>Daily Plan</a>
     <a href="/standing" {% if request.url.path.startswith('/standing') %}class="on"{% endif %}>Standing Orders</a>
+    <a href="/loads" {% if request.url.path.startswith('/loads') %}class="on"{% endif %}>Load Log</a>
     <a href="/drivers" {% if request.url.path.startswith('/drivers') or request.url.path.startswith('/companies') %}class="on"{% endif %}>Drivers</a>
     <a href="/mileage" {% if request.url.path.startswith('/mileage') %}class="on"{% endif %}>Mileage</a>
     <a href="/jmps" {% if request.url.path.startswith('/jmps') %}class="on"{% endif %}>JMPs</a>

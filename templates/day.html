@@ -33,9 +33,11 @@
 <form method="post" action="/day/{{ plan_date }}/loads/bring" class="todo" style="margin-bottom:10px">
   <b>{{ leftover|length }} load line{{ 's' if leftover|length != 1 }} from earlier days {{ 'are' if leftover|length != 1 else 'is' }} still open</b> (never marked hauled or cancelled). Tick the ones that still need to move and bring them to {{ weekday }} {{ short_date }} — their deadlines carry over, so they'll show as more urgent.
   <div style="margin-top:6px">
-  {% for l in leftover %}<label class="chk" style="display:block"><input type="checkbox" name="ids" value="{{ l.id }}" checked> {{ l.plan_date }} · {{ l.count }} × {{ l.lane.pickup.name }} → {{ l.lane.dropoff.name }}{% if l.must_go_by %} <span class="muted">(by {{ l.must_go_by }})</span>{% endif %}</label>{% endfor %}
+  {% for l in leftover %}<div class="leftover-row"><label class="chk"><input type="checkbox" name="ids" value="{{ l.id }}" checked> <b>{{ l.plan_date }}</b> · {{ l.count }} × {{ l.lane.pickup.name }} → {{ l.lane.dropoff.name }}{% if l.must_go_by %} <span class="muted">(by {{ l.must_go_by }})</span>{% endif %}</label>
+    <span class="leftover-actions"><button type="submit" class="small secondary" name="action" value="haul_{{ l.id }}" title="all {{ l.count }} were hauled on {{ l.plan_date }}">✓ hauled on {{ l.plan_date[5:] }}</button>
+    <input type="text" name="why_{{ l.id }}" placeholder="reason" class="w80" style="width:120px"><button type="submit" class="small secondary" name="action" value="cancel_{{ l.id }}" title="cancel all {{ l.count }} (kept in the load log)">cancel</button></span></div>{% endfor %}
   </div>
-  <div class="bar" style="margin-top:6px"><button type="submit" class="small">Bring ticked loads to this day</button> <span class="muted">or mark them hauled/cancelled on their own day to clear this notice.</span></div>
+  <div class="bar" style="margin-top:6px"><button type="submit" name="action" value="bring" class="small">Bring ticked loads to this day</button> <span class="muted">Or use ✓ hauled / cancel on a line to close it out where it was. To mark only some of a line hauled, open that day and use "Mark…" on the line. Nothing is deleted — everything stays in the <a href="/loads">Load Log</a>.</span></div>
 </form>
 {% endif %}
 <form method="post" action="/day/{{ plan_date }}/loads/save" id="loadsForm">
@@ -53,6 +55,7 @@
     </select>{% if u.code == 'flex' %}<div class="th-sub muted">by {{ u.deadline[5:] }}</div>{% endif %}</td>
   {% set tks = tanks_by_loc.get(l.lane.pickup_id, []) %}{% set gz = l.lane.pickup.requires_gauging or l.gauge in ('haul', 'only') %}
   <td><b>{{ l.lane.pickup.name }}</b> → {{ l.lane.dropoff.name }}{% if l.standing_order_id %} <span class="pill" title="from a standing order">daily</span>{% endif %}<br><span class="muted">{{ l.lane.account or '' }}</span>
+    {% set sm = r.sm %}{% if sm.hauled or sm.cancelled or sm.rejected %}<div class="th-sub"><span class="ok-n">✓ {{ sm.hauled or 0 }} hauled</span>{% if sm.cancelled %} · {{ sm.cancelled }} cancelled{% endif %}{% if sm.rejected %} · <span class="pri-today">{{ sm.rejected }} rejected</span>{% endif %} <span class="muted">· {{ l.count }} still open</span></div>{% endif %}
     {% if tks or gz %}<div class="gaugebar">
       {% if tks %}<select name="tank_id{{ S }}" title="which tank these loads come from"><option value="">tank?</option>{% for tk in tks %}<option value="{{ tk.id }}" {% if l.tank_id == tk.id %}selected{% endif %}>{{ tk.name }}</option>{% endfor %}</select>{% endif %}
       {% if gz or tks %}<select name="gauge{{ S }}" class="{% if gz %}gauge-on{% endif %}" title="gauging for the first load from this tank today">
@@ -71,9 +74,24 @@
   <td class="detail"><select name="status{{ S }}">{% for st_ in ['open','planned','hauled','cancelled'] %}<option value="{{ st_ }}" {% if l.status == st_ %}selected{% endif %}>{{ st_ }}</option>{% endfor %}</select></td>
   <td class="detail"><input type="text" name="notes{{ S }}" style="min-width:140px" value="{{ l.notes or '' }}"></td>
   <td style="white-space:nowrap">
-      <button type="submit" class="small secondary" formaction="/day/{{ plan_date }}/loads/{{ l.id }}" name="action" value="move" onclick="var d=prompt('Move these loads to which date? (YYYY-MM-DD)','{{ next }}'); if(!d) return false; document.getElementById('new_date').value=d;">Move</button>
-      <button type="submit" class="small secondary" formaction="/day/{{ plan_date }}/loads/{{ l.id }}" name="action" value="delete" onclick="return confirm('Remove these loads from this day?')">✕</button></td>
+      <button type="button" class="small" onclick="var r=document.getElementById('oc{{ l.id }}'); r.hidden=!r.hidden;" title="mark some or all of these loads hauled, cancelled, rejected or moved">Mark…</button>
+      <button type="submit" class="small secondary" formaction="/day/{{ plan_date }}/loads/{{ l.id }}" name="action" value="move" onclick="var d=prompt('Move ALL {{ l.count }} open loads on this line to which date? (YYYY-MM-DD)','{{ next }}'); if(!d) return false; document.getElementById('new_date').value=d;">Move</button>
+      <button type="submit" class="small secondary" formaction="/day/{{ plan_date }}/loads/{{ l.id }}" name="action" value="delete" onclick="return confirm('Remove the open loads on this line from the board? They stay in the load log as removed.')">✕</button></td>
 </tr>
+<tr class="ocrow" id="oc{{ l.id }}" hidden><td colspan="11">
+  <div class="bar">
+    <b>Mark</b>
+    <input type="number" name="oc_n_{{ l.id }}" class="w60" min="1" max="{{ l.count }}" value="{{ l.count }}"> of {{ l.count }} open load{{ 's' if l.count != 1 }} as
+    <select name="oc_kind_{{ l.id }}" onchange="var k=this.value; var row=this.closest('.bar'); row.querySelector('.oc-driver').hidden=(k!='hauled'); row.querySelector('.oc-note').hidden=(k=='hauled'||k=='moved'); row.querySelector('.oc-datelabel').textContent=(k=='hauled'?'hauled on':(k=='moved'?'move to':'on'));">
+      <option value="hauled">hauled</option><option value="cancelled">cancelled</option><option value="rejected">rejected (BS&amp;W, temp…)</option><option value="moved">moved to another day</option>
+    </select>
+    <label><span class="oc-datelabel">hauled on</span> <input type="date" name="oc_date_{{ l.id }}" value="{{ plan_date }}"></label>
+    <label class="oc-driver">by <select name="oc_driver_{{ l.id }}"><option value="">planned driver</option>{% for d in active_drivers %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}</select></label>
+    <input type="text" name="oc_note_{{ l.id }}" class="oc-note" placeholder="reason (e.g. high BS&W, low temperature)" style="width:240px" hidden>
+    <button type="submit" class="small" formaction="/day/{{ plan_date }}/loads/{{ l.id }}" name="action" value="outcome">Apply</button>
+    <span class="muted th-sub">Hauled = completion date. Each load keeps its own tracking number in the <a href="/loads">Load Log</a>.</span>
+  </div>
+</td></tr>
 {% endfor %}
 {% if load_rows %}
 <tr class="tot"><td colspan="2">Total for the day</td><td class="num">{{ tot.count }}</td><td></td><td class="num">${{ '{:,.0f}'.format(tot.rev) }}</td><td class="num muted">${{ '{:,.0f}'.format(tot.rev_fsc) }}</td><td colspan="5" class="muted">driver pay ${{ '{:,.0f}'.format(tot.pay) }}</td></tr>
@@ -82,6 +100,17 @@
 {% endif %}
 </table></div>
 <input type="hidden" name="new_date" id="new_date" value="">
+{% if done_rows %}
+<details style="margin-top:8px"><summary class="muted">{{ done_rows|length }} line{{ 's' if done_rows|length != 1 }} finished on this day (all loads hauled / cancelled / rejected)</summary>
+<div class="wrap"><table>
+<tr><th>Lane</th><th class="num">Hauled</th><th class="num">Cancelled</th><th class="num">Rejected</th><th class="num">Removed</th><th></th></tr>
+{% for r in done_rows %}{% set l = r.l %}
+<tr><td>{{ l.lane.pickup.name }} → {{ l.lane.dropoff.name }}{% if l.tank %} <span class="muted">· {{ l.tank.name }}</span>{% endif %}</td>
+    <td class="num ok-n">{{ r.sm.hauled or 0 }}</td><td class="num">{{ r.sm.cancelled or 0 }}</td><td class="num">{{ r.sm.rejected or 0 }}</td><td class="num muted">{{ r.sm.removed or 0 }}</td>
+    <td><a href="/loads?line={{ l.id }}" class="muted">details / undo</a></td></tr>
+{% endfor %}
+</table></div></details>
+{% endif %}
 {% if load_rows %}<div class="bar" style="margin-top:6px"><button type="submit" class="small">Save all load lines</button> <span class="muted">Priority saves itself the moment you change it. Counts, barrels, tanks, gauge, deadline, window, status and notes save with this button (or with any Move / ✕ click). <b>today</b> = has to move this day · <b>tomorrow</b> = by tomorrow · <b>flex</b> = within {{ flex_days }} days (Settings), getting more urgent as the deadline nears.</span></div>{% endif %}
 </form>
 

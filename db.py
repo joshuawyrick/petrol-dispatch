@@ -239,6 +239,50 @@ class LoadRequest(Base):
     tank = relationship("Tank")
 
 
+class Load(Base):
+    """One physical load (one truck, one pickup, one drop-off) with a tracking number that never changes.
+
+    A LoadRequest line with count 11 is backed by 11 of these. The line's count is how many are still OPEN;
+    hauled / cancelled / rejected ones stay here forever as the record. Later the driver tablet ticket (BOL) attaches here.
+    """
+    __tablename__ = "loads"
+    id = Column(Integer, primary_key=True)
+    line_id = Column(Integer, ForeignKey("load_requests.id"), nullable=False)
+    lane_id = Column(Integer, ForeignKey("lanes.id"), nullable=False)
+    tank_id = Column(Integer, ForeignKey("tanks.id"))
+    created_date = Column(String(10), nullable=False)  # day the load was entered (or auto-created from a standing order)
+    plan_date = Column(String(10), nullable=False)     # day it is currently planned for (moves with the line)
+    status = Column(String(12), default="open")        # open | hauled | cancelled | rejected | removed
+    outcome_date = Column(String(10))                  # completion date when hauled; date of cancel/reject otherwise
+    outcome_note = Column(String(200))                 # e.g. "high BS&W", "low temperature", "customer cancelled"
+    planned_driver_id = Column(Integer, ForeignKey("drivers.id"))   # from the latest plan build
+    hauled_by_id = Column(Integer, ForeignKey("drivers.id"))        # who actually hauled it (defaults to planned driver)
+    bbl_actual = Column(Float)                         # from the ticket, later
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    line = relationship("LoadRequest")
+    lane = relationship("Lane")
+    tank = relationship("Tank")
+    planned_driver = relationship("Driver", foreign_keys=[planned_driver_id])
+    hauled_by = relationship("Driver", foreign_keys=[hauled_by_id])
+
+    @property
+    def ref(self):
+        return f"L{self.id:06d}"
+
+
+class LoadEvent(Base):
+    """The history of one load: created, moved, planned to a driver, hauled, cancelled, rejected ..."""
+    __tablename__ = "load_events"
+    id = Column(Integer, primary_key=True)
+    load_id = Column(Integer, ForeignKey("loads.id"), nullable=False)
+    at = Column(DateTime, default=datetime.utcnow)
+    event = Column(String(20), nullable=False)         # created | moved | planned | hauled | cancelled | rejected | removed | reopened
+    detail = Column(String(300))
+    plan_date = Column(String(10))                     # the day page the action was taken from
+    load = relationship("Load")
+
+
 class StandingOrder(Base):
     """A recurring load: e.g. Lost Hills -> AFS N Midway, 12 loads every day; Mt Poso -> Olympus 4/day Mon-Sat."""
     __tablename__ = "standing_orders"

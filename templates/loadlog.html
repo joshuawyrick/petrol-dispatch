@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Load Log{% endblock %}
+{% block content %}
+<h1>Load Log</h1>
+<p class="muted">Every load ever entered, with its tracking number and what happened to it. Hauled loads show their completion date. Later the driver's ticket (BOL, barrels, times) attaches to the same number.</p>
+<form class="bar" method="get" action="/loads">
+  <label>from <input type="date" name="from_" value="{{ q.from_ }}"></label>
+  <label>to <input type="date" name="to" value="{{ q.to }}"></label>
+  <select name="by"><option value="plan" {% if q.by == 'plan' %}selected{% endif %}>by planned day</option><option value="created" {% if q.by == 'created' %}selected{% endif %}>by day entered</option><option value="outcome" {% if q.by == 'outcome' %}selected{% endif %}>by completion / outcome date</option></select>
+  <select name="status"><option value="">any status</option>{% for st_ in ['open','hauled','cancelled','rejected','removed'] %}<option value="{{ st_ }}" {% if q.status == st_ %}selected{% endif %}>{{ st_ }}</option>{% endfor %}</select>
+  <input type="text" name="q" placeholder="lane, account, driver, note…" value="{{ q.q }}" style="min-width:220px">
+  <button type="submit">Filter</button>
+  <a class="btn secondary" href="/loads.csv?{{ qs }}">Download CSV</a>
+  <span class="muted">{{ rows|length }} load{{ 's' if rows|length != 1 }}{% if rows|length >= limit %} (first {{ limit }} — narrow the dates){% endif %} · {{ counts.hauled or 0 }} hauled · {{ counts.open or 0 }} open · {{ counts.cancelled or 0 }} cancelled · {{ counts.rejected or 0 }} rejected</span>
+</form>
+<div class="wrap"><table>
+<tr><th>Tracking #</th><th>Lane</th><th>Tank</th><th>Entered</th><th>Planned for</th><th>Status</th><th>Completed / outcome</th><th>Driver</th><th>Note</th></tr>
+{% for ld in rows %}
+<tr class="{% if ld.status == 'rejected' %}bad{% endif %}">
+  <td><a href="/loads/{{ ld.id }}"><b>{{ ld.ref }}</b></a></td>
+  <td>{{ ld.lane.pickup.name }} → {{ ld.lane.dropoff.name }}<br><span class="muted th-sub">{{ ld.lane.account or '' }}</span></td>
+  <td class="muted">{{ ld.tank.name if ld.tank else '' }}</td>
+  <td>{{ ld.created_date }}</td>
+  <td><a href="/day/{{ ld.plan_date }}">{{ ld.plan_date }}</a></td>
+  <td><span class="pill st-{{ ld.status }}">{{ ld.status }}</span></td>
+  <td>{{ ld.outcome_date or '' }}</td>
+  <td class="muted">{% if ld.status == 'hauled' and ld.hauled_by %}{{ ld.hauled_by.name }}{% elif ld.planned_driver %}{{ ld.planned_driver.name }} <span class="th-sub">(planned)</span>{% endif %}</td>
+  <td class="muted">{{ ld.outcome_note or '' }}</td>
+</tr>
+{% endfor %}
+{% if not rows %}<tr><td colspan="9" class="muted">Nothing matches. Loads appear here the moment they're added to a day.</td></tr>{% endif %}
+</table></div>
+{% endblock %}

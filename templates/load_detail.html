@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ ld.ref }}{% endblock %}
+{% block content %}
+<h1>{{ ld.ref }} <span class="pill st-{{ ld.status }}">{{ ld.status }}</span></h1>
+<div class="card">
+  <div><b>{{ ld.lane.pickup.name }}</b> → {{ ld.lane.dropoff.name }}{% if ld.tank %} · {{ ld.tank.name }}{% endif %} <span class="muted">{{ ld.lane.account or '' }}</span></div>
+  <div class="muted" style="margin-top:4px">Entered {{ ld.created_date }} · planned for <a href="/day/{{ ld.plan_date }}">{{ ld.plan_date }}</a>{% if ld.outcome_date %} · {{ 'completed' if ld.status == 'hauled' else ld.status }} {{ ld.outcome_date }}{% endif %}{% if ld.outcome_note %} · {{ ld.outcome_note }}{% endif %}</div>
+  <div class="muted" style="margin-top:4px">{% if ld.hauled_by %}Hauled by <b>{{ ld.hauled_by.name }}</b>{% elif ld.planned_driver %}Planned to {{ ld.planned_driver.name }}{% else %}Not planned to a driver yet{% endif %}{% if ld.bbl_actual %} · {{ ld.bbl_actual }} bbl{% endif %}</div>
+  {% if ld.status != 'open' %}
+  <form method="post" action="/loads/{{ ld.id }}/reopen" style="margin-top:8px" onsubmit="return confirm('Put {{ ld.ref }} back to open on {{ ld.plan_date }}?')"><button type="submit" class="small secondary">Undo — reopen this load</button> <span class="muted">for a wrong click; it goes back on the {{ ld.plan_date }} board</span></form>
+  {% endif %}
+</div>
+<h2>History</h2>
+<div class="wrap"><table>
+<tr><th>When (UTC)</th><th>Event</th><th>Detail</th><th>From day page</th></tr>
+{% for e in events %}<tr><td>{{ e.at.strftime('%Y-%m-%d %H:%M') }}</td><td><b>{{ e.event }}</b></td><td>{{ e.detail or '' }}</td><td class="muted">{{ e.plan_date or '' }}</td></tr>{% endfor %}
+</table></div>
+<p><a class="btn secondary" href="/loads">Back to Load Log</a> <a class="btn secondary" href="/day/{{ ld.plan_date }}">Open {{ ld.plan_date }}</a></p>
+{% endblock %}
