@@ -91,6 +91,12 @@ def pull_hos(s: Session, plan_date: str) -> str:
         clocks = r.get("clocks") or {}
         x = existing.get(d.id) or DriverDay(plan_date=plan_date, driver_id=d.id, available=True, shift=d.usual_shift or "AM")
         cyc = clocks.get("cycle") or {}
+        # the live clocks, always kept as-is for the dispatcher to see (whatever day is being planned)
+        x.hos_drive_left = _h((clocks.get("drive") or {}).get("driveRemainingDurationMs"))
+        x.hos_shift_left = _h((clocks.get("shift") or {}).get("shiftRemainingDurationMs"))
+        x.hos_cycle_left = _h(cyc.get("cycleRemainingDurationMs"))
+        x.hos_break_left = _h((clocks.get("break") or {}).get("timeUntilBreakDurationMs"))
+        x.hos_cycle_tomorrow = _h(cyc.get("cycleTomorrowDurationMs"))
         if is_today:
             x.drive_hours_left = _h((clocks.get("drive") or {}).get("driveRemainingDurationMs"))
             x.duty_hours_left = _h((clocks.get("shift") or {}).get("shiftRemainingDurationMs"))

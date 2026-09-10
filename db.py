@@ -213,6 +213,11 @@ class DriverDay(Base):
     cycle_hours_left = Column(Float)                   # hours left before the 80-hr / 34-hr reset kicks in
     hos_status = Column(String(30))                    # Samsara duty status at last sync
     hos_synced_at = Column(DateTime)
+    hos_drive_left = Column(Float)                     # live ELD clocks as of the last Samsara pull (hours), shown for reference
+    hos_shift_left = Column(Float)
+    hos_cycle_left = Column(Float)
+    hos_break_left = Column(Float)                     # hours of driving allowed before the 30-minute break is due
+    hos_cycle_tomorrow = Column(Float)
     notes = Column(String(200))
     driver = relationship("Driver")
 

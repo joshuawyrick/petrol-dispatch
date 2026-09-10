@@ -161,7 +161,7 @@
 <form method="post" action="/day/{{ plan_date }}/drivers">
 <div class="wrap"><table class="drivers">
 <tr><th>In</th><th>Driver</th><th>Shift</th><th>Earliest start</th><th class="num">Cycle hrs left<br><span class="muted th-sub">of {{ st.reset_after_hours|int }}</span></th>
-    <th class="num detail">Drive hrs left</th><th class="num detail">On-duty hrs left</th><th>Samsara</th><th class="detail">Note</th></tr>
+    <th class="num detail">Drive hrs left</th><th class="num detail">On-duty hrs left</th><th>Samsara ELD clocks (hours left)</th><th class="detail">Note</th></tr>
 {% for r in drv_rows %}{% set d = r.d %}{% set x = r.x %}
 <tr {% if not r.available %}class="bad"{% endif %}>
   <td><input type="checkbox" name="avail_{{ d.id }}" value="1" {% if r.available %}checked{% endif %}>{% if r.off_today %} <span class="pill" title="regular day off">off</span>{% endif %}</td>
@@ -171,7 +171,14 @@
   <td class="num"><input type="number" step="0.25" class="w80" name="cycle_{{ d.id }}" value="{{ x.cycle_hours_left if x and x.cycle_hours_left else '' }}" placeholder="{{ st.reset_after_hours|int }}"></td>
   <td class="num detail"><input type="number" step="0.25" class="w80" name="drive_{{ d.id }}" value="{{ x.drive_hours_left if x and x.drive_hours_left else '' }}" placeholder="{{ d.max_drive_hours or st.max_drive_hours }}"></td>
   <td class="num detail"><input type="number" step="0.25" class="w80" name="duty_{{ d.id }}" value="{{ x.duty_hours_left if x and x.duty_hours_left else '' }}" placeholder="{{ d.max_duty_hours or st.max_duty_hours }}"></td>
-  <td class="muted">{% if r.call %}<span class="pill review" title="this sub-hauler has no Samsara — call their dispatch and type the hours in">call for hours</span>{% if r.phone %}<br><span class="th-sub">{{ r.phone }}</span>{% endif %}{% elif x and x.hos_synced_at %}{{ x.hos_status or '' }}<br><span class="th-sub">{{ x.hos_synced_at.strftime('%m/%d %H:%M') }}Z</span>{% endif %}</td>
+  <td class="muted eld">{% if r.call %}<span class="pill review" title="this sub-hauler has no Samsara — call their dispatch and type the hours in">call for hours</span>{% if r.phone %}<br><span class="th-sub">{{ r.phone }}</span>{% endif %}{% elif x and x.hos_synced_at %}<span class="eld-status">{{ (x.hos_status or '')|replace('_', ' ')|lower }}</span>
+      <div class="eld-grid">
+        <span>drive</span><b>{{ x.hos_drive_left if x.hos_drive_left is not none else '—' }}</b>
+        <span>shift</span><b>{{ x.hos_shift_left if x.hos_shift_left is not none else '—' }}</b>
+        <span>cycle</span><b>{{ x.hos_cycle_left if x.hos_cycle_left is not none else '—' }}</b>
+        <span>break in</span><b>{{ x.hos_break_left if x.hos_break_left is not none else '—' }}</b>
+        {% if x.hos_cycle_tomorrow is not none %}<span>cycle tmrw</span><b>{{ x.hos_cycle_tomorrow }}</b>{% endif %}
+      </div><span class="th-sub">as of {{ x.hos_synced_at.strftime('%m/%d %H:%M') }} UTC</span>{% elif d.samsara_id %}<span class="th-sub">not pulled yet</span>{% endif %}</td>
   <td class="detail"><input type="text" name="dnote_{{ d.id }}" value="{{ x.notes if x and x.notes else '' }}"></td>
 </tr>
 {% endfor %}
