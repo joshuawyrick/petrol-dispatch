@@ -27,6 +27,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 templates.env.filters["hm"] = optimizer.min_to_hm
 templates.env.filters["money"] = lambda v: f"${v:,.0f}"
+templates.env.globals["css_v"] = str(int(os.path.getmtime("static/style.css")))     # browsers re-fetch the stylesheet after every deploy
 
 KINDS = ["pickup", "dropoff", "both", "yard"]
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -749,6 +750,7 @@ def _day_ctx(s: Session, plan_date: str):
     for tk in s.query(Tank).filter(Tank.active == True).order_by(Tank.name).all():
         tanks_by_loc.setdefault(tk.location_id, []).append(tk)
     gaugers_today = [r["d"].name for r in drv_rows if r["available"] and r["d"].can_gauge]
+    last_sync = max([x.hos_synced_at for x in dd.values() if x.hos_synced_at], default=None)
     needs_gauge = any(l.lane.pickup.requires_gauging or l.gauge in ("haul", "only") for l in loads)
     flex_days = int(m["st"].get("flex_days") or urg.DEFAULT_FLEX_DAYS)
     load_rows = []
@@ -775,7 +777,7 @@ def _day_ctx(s: Session, plan_date: str):
                 weekday_long=d0.strftime("%A"), pretty_date=d0.strftime("%B %-d, %Y"), short_date=d0.strftime("%b %-d"), weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
                 avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"], flex_days=flex_days, leftover=leftover,
-                done_rows=done_rows, active_drivers=active_drivers,
+                done_rows=done_rows, active_drivers=active_drivers, last_sync=last_sync,
                 has_samsara=bool(samsara.token()), tanks_by_loc=tanks_by_loc, gaugers_today=gaugers_today, needs_gauge=needs_gauge,
                 lane_tanks_json=json.dumps({ln.id: [[tk.id, tk.name] for tk in tanks_by_loc.get(ln.pickup_id, [])] for ln in lanes_all}),
                 lane_gauge_json=json.dumps({ln.id: bool(ln.pickup.requires_gauging) for ln in lanes_all}))

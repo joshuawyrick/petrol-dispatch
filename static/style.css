@@ -106,5 +106,13 @@ tr.ocrow td { background:#f4f7fb; border-top:none; }
 .pill.st-open { background:#e9edf3; } .pill.st-hauled { background:#dff3e4; color:#1a7f37; } .pill.st-cancelled { background:#eee; color:#666; }
 .pill.st-rejected { background:#fde8e8; color:#b00020; } .pill.st-removed { background:#eee; color:#999; }
 
-td.eld { min-width:150px; } .eld-status { text-transform:capitalize; font-size:11px; }
-.eld-grid { display:grid; grid-template-columns:auto auto; column-gap:8px; row-gap:0; font-size:11px; line-height:1.35; margin:2px 0; } .eld-grid b { color:var(--text, #222); text-align:right; }
+/* Step 2: plan inputs (left) vs live Samsara clocks (right) */
+table.eldtable tr.grp th { background:#f1f4f8; border-bottom:none; padding:4px 10px; font-size:11px; letter-spacing:.04em; text-transform:uppercase; color:#5b6672; }
+table.eldtable th.grp-eld, table.eldtable td.eld, table.eldtable th.eld { border-left:1px solid #dfe5ec; }
+table.eldtable th.grp-eld { border-left:2px solid #c9d3de; } table.eldtable td.eld:first-of-type, table.eldtable th.eld:first-of-type { border-left:2px solid #c9d3de; }
+table.eldtable td.eld { background:#fafbfd; font-variant-numeric:tabular-nums; white-space:nowrap; }
+table.eldtable td:nth-child(2) { min-width:190px; white-space:nowrap; } table.eldtable td.detail input[type=text] { width:120px; }
+table.eldtable .hos-status-cell { min-width:80px; }
+table.eldtable td.eld.low { color:#b00020; font-weight:700; }
+.hos { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; background:#e9edf3; color:#3b4652; }
+.hos-driving { background:#dff3e4; color:#1a7f37; } .hos-onduty { background:#dde8ff; color:#1f4fb3; } .hos-offduty { background:#eceff3; color:#6b7480; } .hos-sleeperberth { background:#ece6f7; color:#5a3d8a; }

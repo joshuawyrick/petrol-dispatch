@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Dispatch {{ plan.plan_date }}</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v={{ css_v }}">
 <style>body{background:#fff} main{max-width:none} .cards{grid-template-columns:repeat(4,1fr)} @media print{.noprint{display:none}}</style>
 </head><body><main>
 <h1>Dispatch plan — {{ plan.plan_date }} <span class="muted" style="font-size:13px">built {{ plan.generated_at }} UTC</span></h1>

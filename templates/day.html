@@ -159,32 +159,48 @@
   <span class="muted">Untick anyone not working this day. Blank hours = the driver's normal limits.{% if not is_today %} For a future day only cycle hours come from Samsara (drive/shift reset after the 10-hour break).{% endif %}</span>
 </div>
 <form method="post" action="/day/{{ plan_date }}/drivers">
-<div class="wrap"><table class="drivers">
-<tr><th>In</th><th>Driver</th><th>Shift</th><th>Earliest start</th><th class="num">Cycle hrs left<br><span class="muted th-sub">of {{ st.reset_after_hours|int }}</span></th>
-    <th class="num detail">Drive hrs left</th><th class="num detail">On-duty hrs left</th><th>Samsara ELD clocks (hours left)</th><th class="detail">Note</th></tr>
-{% for r in drv_rows %}{% set d = r.d %}{% set x = r.x %}
+<div class="wrap"><table class="drivers eldtable">
+<tr class="grp">
+  <th colspan="2"></th>
+  <th colspan="5" class="grp-plan">Plan with <span class="muted th-sub">(editable · blank = normal limits)</span></th>
+  <th colspan="6" class="grp-eld">Samsara ELD · live{% if last_sync %} <span class="muted th-sub">as of {{ last_sync.strftime('%m/%d %H:%M') }} UTC</span>{% endif %}</th>
+  <th class="detail"></th>
+</tr>
+<tr>
+  <th>In</th><th>Driver</th>
+  <th>Shift</th><th>Earliest start</th><th class="num">Cycle<br><span class="muted th-sub">of {{ st.reset_after_hours|int }}</span></th>
+  <th class="num detail">Drive</th><th class="num detail">On-duty</th>
+  <th class="eld">Status</th><th class="num eld">Drive</th><th class="num eld">Shift</th><th class="num eld">Cycle</th><th class="num eld">Break in</th><th class="num eld">Cycle tmrw</th>
+  <th class="detail">Note</th>
+</tr>
+{% for r in drv_rows %}{% set d = r.d %}{% set x = r.x %}{% set live = x and x.hos_synced_at %}
 <tr {% if not r.available %}class="bad"{% endif %}>
   <td><input type="checkbox" name="avail_{{ d.id }}" value="1" {% if r.available %}checked{% endif %}>{% if r.off_today %} <span class="pill" title="regular day off">off</span>{% endif %}</td>
-  <td><b>{{ d.name }}</b>{% if d.is_sub %} <span class="pill sub" title="sub-hauler: keeps {{ d.company.share_pct|int }}% of load pay + fuel surcharge">{{ d.company_short }}</span>{% endif %}<br><span class="muted">{{ d.yard.name if d.yard else 'NO YARD — set it on the Drivers page' }}{% if d.truck %} · truck {{ d.truck }}{% endif %}</span></td>
+  <td><b>{{ d.name }}</b>{% if d.is_sub %} <span class="pill sub" title="sub-hauler: keeps {{ d.company.share_pct|int }}% of load pay + fuel surcharge">{{ d.company_short }}</span>{% endif %}{% if d.can_gauge %} <span class="pill gauge">gauger</span>{% endif %}<br><span class="muted">{{ d.yard.name if d.yard else 'NO YARD — set it on the Drivers page' }}{% if d.truck %} · truck {{ d.truck }}{% endif %}</span></td>
   <td><select name="shift_{{ d.id }}"><option value="AM" {% if r.shift=='AM' %}selected{% endif %}>AM</option><option value="PM" {% if r.shift=='PM' %}selected{% endif %}>PM</option></select></td>
   <td><input type="time" name="start_{{ d.id }}" value="{{ x.start_time if x and x.start_time else '' }}"></td>
   <td class="num"><input type="number" step="0.25" class="w80" name="cycle_{{ d.id }}" value="{{ x.cycle_hours_left if x and x.cycle_hours_left else '' }}" placeholder="{{ st.reset_after_hours|int }}"></td>
   <td class="num detail"><input type="number" step="0.25" class="w80" name="drive_{{ d.id }}" value="{{ x.drive_hours_left if x and x.drive_hours_left else '' }}" placeholder="{{ d.max_drive_hours or st.max_drive_hours }}"></td>
   <td class="num detail"><input type="number" step="0.25" class="w80" name="duty_{{ d.id }}" value="{{ x.duty_hours_left if x and x.duty_hours_left else '' }}" placeholder="{{ d.max_duty_hours or st.max_duty_hours }}"></td>
-  <td class="muted eld">{% if r.call %}<span class="pill review" title="this sub-hauler has no Samsara — call their dispatch and type the hours in">call for hours</span>{% if r.phone %}<br><span class="th-sub">{{ r.phone }}</span>{% endif %}{% elif x and x.hos_synced_at %}<span class="eld-status">{{ (x.hos_status or '')|replace('_', ' ')|lower }}</span>
-      <div class="eld-grid">
-        <span>drive</span><b>{{ x.hos_drive_left if x.hos_drive_left is not none else '—' }}</b>
-        <span>shift</span><b>{{ x.hos_shift_left if x.hos_shift_left is not none else '—' }}</b>
-        <span>cycle</span><b>{{ x.hos_cycle_left if x.hos_cycle_left is not none else '—' }}</b>
-        <span>break in</span><b>{{ x.hos_break_left if x.hos_break_left is not none else '—' }}</b>
-        {% if x.hos_cycle_tomorrow is not none %}<span>cycle tmrw</span><b>{{ x.hos_cycle_tomorrow }}</b>{% endif %}
-      </div><span class="th-sub">as of {{ x.hos_synced_at.strftime('%m/%d %H:%M') }} UTC</span>{% elif d.samsara_id %}<span class="th-sub">not pulled yet</span>{% endif %}</td>
+  {% if r.call %}
+  <td class="eld" colspan="6"><span class="pill review" title="this sub-hauler has no Samsara — call their dispatch and type the hours in">call for hours</span>{% if r.phone %} <span class="muted">{{ r.phone }}</span>{% endif %}</td>
+  {% elif live %}
+  {% set stt = (x.hos_status or '')|lower|replace('_','') %}
+  <td class="eld"><span class="hos hos-{{ stt }}">{{ {'driving':'Driving','onduty':'On duty','offduty':'Off duty','sleeperberth':'Sleeper','yardmove':'Yard move','personalconveyance':'Personal'}.get(stt, stt|replace('_',' ')|capitalize) }}</span></td>
+  <td class="num eld {% if x.hos_drive_left is not none and x.hos_drive_left < 2 %}low{% endif %}">{{ '%.2f'|format(x.hos_drive_left) if x.hos_drive_left is not none else '—' }}</td>
+  <td class="num eld {% if x.hos_shift_left is not none and x.hos_shift_left < 2 %}low{% endif %}">{{ '%.2f'|format(x.hos_shift_left) if x.hos_shift_left is not none else '—' }}</td>
+  <td class="num eld {% if x.hos_cycle_left is not none and x.hos_cycle_left < 10 %}low{% endif %}">{{ '%.2f'|format(x.hos_cycle_left) if x.hos_cycle_left is not none else '—' }}</td>
+  <td class="num eld {% if x.hos_break_left is not none and x.hos_break_left < 1 %}low{% endif %}">{{ '%.2f'|format(x.hos_break_left) if x.hos_break_left is not none else '—' }}</td>
+  <td class="num eld">{{ '%.2f'|format(x.hos_cycle_tomorrow) if x.hos_cycle_tomorrow is not none else '—' }}</td>
+  {% else %}
+  <td class="eld muted" colspan="6"><span class="th-sub">{{ "not pulled yet" if d.samsara_id else "no Samsara link" }}</span></td>
+  {% endif %}
   <td class="detail"><input type="text" name="dnote_{{ d.id }}" value="{{ x.notes if x and x.notes else '' }}"></td>
 </tr>
 {% endfor %}
-{% if not drv_rows %}<tr><td colspan="9" class="muted">No active drivers. Add them on the <a href="/drivers">Drivers</a> page.</td></tr>{% endif %}
+{% if not drv_rows %}<tr><td colspan="14" class="muted">No active drivers. Add them on the <a href="/drivers">Drivers</a> page.</td></tr>{% endif %}
 </table></div>
-<p><button type="submit">Save drivers for {{ weekday }} {{ short_date }}</button></p>
+<p><button type="submit">Save drivers for {{ weekday }} {{ short_date }}</button> <span class="muted">Left block is what the engine plans with; right block is what Samsara reports right now. Numbers in red are running low.</span></p>
 </form>
 </section>
 
