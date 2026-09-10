@@ -902,9 +902,9 @@ async def day_drivers_save(request: Request, plan_date: str, s: Session = Depend
         x.available = bool(f.get(f"avail_{d.id}"))
         x.shift = f.get(f"shift_{d.id}") or "AM"
         x.start_time = f.get(f"start_{d.id}") or None
-        x.drive_hours_left = fnum(f.get(f"drive_{d.id}"))
-        x.duty_hours_left = fnum(f.get(f"duty_{d.id}"))
-        x.cycle_hours_left = fnum(f.get(f"cycle_{d.id}"))
+        if f"drive_{d.id}" in f: x.drive_hours_left = fnum(f.get(f"drive_{d.id}"))     # typed only for drivers without Samsara
+        if f"duty_{d.id}" in f: x.duty_hours_left = fnum(f.get(f"duty_{d.id}"))
+        if f"cycle_{d.id}" in f: x.cycle_hours_left = fnum(f.get(f"cycle_{d.id}"))
         x.notes = f.get(f"dnote_{d.id}") or None
         s.add(x)
     s.commit()
