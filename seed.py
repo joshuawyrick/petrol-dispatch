@@ -29,6 +29,7 @@ SETTINGS = [
     ("reset_hours", 34, "Full reset length", "hours", ""),
     ("flex_days", 5, "Flex loads must move within", "days", "A load marked 'flex' gets a deadline this many days out; as the deadline nears it gets more urgent, and on the day it becomes 'today'"),
     ("gauge_minutes", 15, "Time to gauge a tank", "minutes", "Sample + API gravity / BS&W; done while loading when the gauger hauls"),
+    ("low_cycle_hours", 16, "Low-cycle warning below", "hours", "A working driver whose cycle hours (today's live, or the estimate for a later day) are under this is highlighted and dispatch is asked whether they are really working"),
     ("priority_step", 30, "Priority strength between company tiers", "% of load profit", "A load on a tier-2 company counts as this much worse than on tier 1 (tier 3 = double). 30 = fill tier 1 first unless it's a very bad fit; 90 = always"),
 ]
 

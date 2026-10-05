@@ -2,7 +2,7 @@
 
 Phase 1: master data, settings, mileage cache.   Phase 2: login, fuel surcharge + EIA price, drivers, daily load board.
 """
-import os, hashlib, re
+import os, hashlib, re, time
 from datetime import date, datetime, timedelta
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -14,11 +14,16 @@ from sqlalchemy.orm import Session, joinedload
 from db import (SessionLocal, Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, StandingOrder, CompanyInfo, JmpDoc,
                 Company, CompanyLaneRate, Tank, LocationRestriction, Load, LoadEvent, init_db)
 from seed import seed, ensure_companies, import_drivers, petrol_company
-import mileage, fsc, optimizer, samsara, jmp
+import mileage, fsc, optimizer, samsara, jmp, hos
 import urgency as urg
 import loads as ldm
 from fastapi.responses import Response
 import json
+
+# "today", shift start times and hours-of-service math must follow the company's clock, not the server's (UTC on Render)
+os.environ["TZ"] = os.environ.get("APP_TZ", "America/Los_Angeles")
+try: time.tzset()
+except Exception: pass
 
 app = FastAPI(title="Petrol Dispatch Optimizer")
 PASSWORD = os.environ.get("DISPATCH_PASSWORD", "").strip()
@@ -27,6 +32,8 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 templates.env.filters["hm"] = optimizer.min_to_hm
 templates.env.filters["money"] = lambda v: f"${v:,.0f}"
+templates.env.globals["fmt_hm"] = hos.fmt_hm
+templates.env.globals["fmt_clock"] = hos.fmt_clock
 templates.env.globals["css_v"] = str(int(os.path.getmtime("static/style.css")))     # browsers re-fetch the stylesheet after every deploy
 
 KINDS = ["pickup", "dropoff", "both", "yard"]
@@ -726,6 +733,14 @@ def annotate_legs(s: Session, plan: dict):
     plan["unreviewed_legs"] = unreviewed
 
 
+def fmt_hm_(h):
+    return hos.fmt_hm(h)
+
+
+def has_token_():
+    return samsara.token()
+
+
 def _day_ctx(s: Session, plan_date: str):
     added = apply_standing_orders(s, plan_date)
     m = money_ctx(s)
@@ -734,12 +749,38 @@ def _day_ctx(s: Session, plan_date: str):
     dd = {x.driver_id: x for x in s.query(DriverDay).filter(DriverDay.plan_date == plan_date).all()}
     weekday = DAYS[datetime.strptime(plan_date, "%Y-%m-%d").weekday()]
     drv_rows = []
+    snaps = hos.snapshots(s)
+    proj = hos.project(s, plan_date, drivers, m["st"], snaps)
+    low_thr = float(m["st"].get("low_cycle_hours") or 16)
+    min_off = float(m["st"].get("min_off_hours") or 10)
     for d in drivers:
         x = dd.get(d.id)
         off_today = weekday in (d.days_off or "").split(",")
         call = d.is_sub and not d.company.has_samsara          # no Samsara: dispatch phones the sub for hours
-        drv_rows.append(dict(d=d, x=x, available=(x.available if x else not off_today), shift=(x.shift if x else (d.usual_shift or "AM")),
-                             off_today=off_today, call=call, phone=(d.company.dispatch_phone if call else None)))
+        avail = (x.available if x else not off_today)
+        p = proj.get(d.id) or dict(kind=None)
+        snap = snaps.get(d.id)
+        if p["kind"]: cyc = p["cycle"]                         # live (today) or estimated (later day)
+        else: cyc = x.cycle_hours_left if x else None          # typed by hand / pulled earlier
+        low = bool(avail and cyc is not None and cyc < low_thr)
+        el = hos.status_elapsed_h(snap) if snap else None
+        stt = hos.norm_status(snap.hos_status) if snap else ""
+        reset = None                                           # visual cue: how far through the 10-hour break an off-duty driver is
+        if el is not None and stt in hos.OFF_GROUP:
+            reset = "done" if el >= min_off else f"{fmt_hm_(min_off - el)}"
+        legal = p.get("legal_start")
+        typed_min = None
+        if x and x.start_time:
+            try: typed_min = int(x.start_time[:2]) * 60 + int(x.start_time[3:5])
+            except Exception: typed_min = None
+        legal_warn = bool(legal is not None and typed_min is not None and typed_min < legal)
+        drv_rows.append(dict(d=d, x=x, available=avail, shift=(x.shift if x else (d.usual_shift or "AM")),
+                             off_today=off_today, call=call, phone=(d.company.dispatch_phone if call else None),
+                             snap=snap if (snap and d.samsara_id) else None, p=p, cyc=cyc, low=low, elapsed=el, reset=reset,
+                             legal=legal, legal_warn=legal_warn, confirmed=bool(x and x.cycle_confirmed)))
+    lowcycle = [r for r in drv_rows if r["low"] and not r["confirmed"]]
+    est_day = any(r["p"]["kind"] == "est" for r in drv_rows)
+    stale_snap = (plan_date >= date.today().isoformat()) and any(r["d"].samsara_id and r["p"]["kind"] is None and r["available"] for r in drv_rows) and bool(has_token_()) 
     all_lines = s.query(LoadRequest).options(joinedload(LoadRequest.lane).joinedload(Lane.pickup),
                                              joinedload(LoadRequest.lane).joinedload(Lane.dropoff), joinedload(LoadRequest.tank)) \
         .filter(LoadRequest.plan_date == plan_date, LoadRequest.status.notin_(["cancelled"])).all()
@@ -752,7 +793,7 @@ def _day_ctx(s: Session, plan_date: str):
     for tk in s.query(Tank).filter(Tank.active == True).order_by(Tank.name).all():
         tanks_by_loc.setdefault(tk.location_id, []).append(tk)
     gaugers_today = [r["d"].name for r in drv_rows if r["available"] and r["d"].can_gauge]
-    last_sync = max([x.hos_synced_at for x in dd.values() if x.hos_synced_at], default=None)
+    last_sync = max([r["snap"].hos_synced_at for r in drv_rows if r["snap"] is not None and r["snap"].hos_synced_at], default=None)
     needs_gauge = any(l.lane.pickup.requires_gauging or l.gauge in ("haul", "only") for l in loads)
     flex_days = int(m["st"].get("flex_days") or urg.DEFAULT_FLEX_DAYS)
     load_rows = []
@@ -778,7 +819,7 @@ def _day_ctx(s: Session, plan_date: str):
                 today=date.today().isoformat(), tomorrow=(date.today() + timedelta(days=1)).isoformat(),
                 weekday_long=d0.strftime("%A"), pretty_date=d0.strftime("%B %-d, %Y"), short_date=d0.strftime("%b %-d"), weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
                 prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
-                avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, st=m["st"], flex_days=flex_days, leftover=leftover,
+                avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, lowcycle=lowcycle, low_thr=low_thr, est_day=est_day, stale_snap=stale_snap, st=m["st"], flex_days=flex_days, leftover=leftover,
                 done_rows=done_rows, active_drivers=active_drivers, last_sync=last_sync, removed_lines=removed_lines,
                 has_samsara=bool(samsara.token()), tanks_by_loc=tanks_by_loc, gaugers_today=gaugers_today, needs_gauge=needs_gauge,
                 lane_tanks_json=json.dumps({ln.id: [[tk.id, tk.name] for tk in tanks_by_loc.get(ln.pickup_id, [])] for ln in lanes_all}),
@@ -918,6 +959,40 @@ def load_reopen(load_id: int, s: Session = Depends(get_db)):
     return RedirectResponse(f"/loads/{load_id}", status_code=303)
 
 
+
+# ---------------- Exports (for moving data into the Shift Planner product) ----------------
+@app.get("/export/locations.csv")
+def export_locations(s: Session = Depends(get_db)):
+    import csv, io
+    buf = io.StringIO(); w = csv.writer(buf)
+    w.writerow(["name", "kind", "lat", "lon", "avg_qty", "avg_weight_tons", "load_minutes", "unload_minutes", "open_time", "close_time", "notes"])
+    for l in s.query(Location).filter(Location.active == True).order_by(Location.kind, Location.name).all():
+        w.writerow([l.name, l.kind, l.lat, l.lon, l.avg_bbl_override or l.avg_bbl_history or "", "", l.load_minutes or "", l.load_minutes or "", l.open_time or "", l.close_time or "", l.notes or ""])
+    return Response(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="locations.csv"'})
+
+
+@app.get("/export/lanes.csv")
+def export_lanes(s: Session = Depends(get_db)):
+    import csv, io
+    buf = io.StringIO(); w = csv.writer(buf)
+    w.writerow(["pickup", "dropoff", "customer", "product", "rate_basis", "rate", "min_qty", "pay_basis", "pay_rate", "notes"])
+    for l in s.query(Lane).options(joinedload(Lane.pickup), joinedload(Lane.dropoff)).filter(Lane.active == True).all():
+        w.writerow([l.pickup.name, l.dropoff.name, l.account or "", l.product or "crude oil", "unit", l.rate or "", "", "unit", l.driver_pay or "", l.notes or ""])
+    return Response(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="lanes.csv"'})
+
+
+@app.get("/export/mileage.csv")
+def export_mileage(s: Session = Depends(get_db)):
+    import csv, io
+    buf = io.StringIO(); w = csv.writer(buf)
+    w.writerow(["origin", "dest", "miles", "minutes", "approved"])
+    for d in s.query(Distance).options(joinedload(Distance.origin), joinedload(Distance.dest)).all():
+        m = d.override_miles if d.override_miles else d.google_miles
+        if m is None or d.source == "straight-line" and not d.override_miles: continue
+        w.writerow([d.origin.name, d.dest.name, m, d.override_minutes or d.google_minutes or "", 1 if d.approved else 0])
+    return Response(buf.getvalue(), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="mileage.csv"'})
+
+
 # ---------------- Standing orders (recurring daily loads) ----------------
 @app.get("/standing", response_class=HTMLResponse)
 def standing(request: Request, s: Session = Depends(get_db)):
@@ -997,6 +1072,23 @@ async def day_drivers_save(request: Request, plan_date: str, s: Session = Depend
         s.add(x)
     s.commit()
     return RedirectResponse(f"/day/{plan_date}?msg=Driver+availability+saved#drivers", status_code=303)
+
+
+@app.post("/day/{plan_date}/driver/{driver_id}/cycle")
+async def day_driver_cycle(request: Request, plan_date: str, driver_id: int, s: Session = Depends(get_db)):
+    """Answer to the low-cycle question: 'work' = yes, working (limited to the cycle hours); 'off' = not working this day."""
+    f = await request.form()
+    d = s.get(Driver, driver_id)
+    if not d: return RedirectResponse(f"/day/{plan_date}#drivers", status_code=303)
+    x = s.query(DriverDay).filter(DriverDay.plan_date == plan_date, DriverDay.driver_id == driver_id).first() or DriverDay(plan_date=plan_date, driver_id=driver_id)
+    if f.get("answer") == "off":
+        x.available = False; x.cycle_confirmed = False
+        msg = f"{d.name} marked not working"
+    else:
+        x.available = True; x.cycle_confirmed = True
+        msg = f"{d.name} confirmed working (shift limited to cycle hours)"
+    s.add(x); s.commit()
+    return RedirectResponse(f"/day/{plan_date}?msg={msg.replace(' ', '+')}#drivers", status_code=303)
 
 
 @app.post("/day/{plan_date}/loads/add")

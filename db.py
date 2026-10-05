@@ -218,6 +218,8 @@ class DriverDay(Base):
     hos_cycle_left = Column(Float)
     hos_break_left = Column(Float)                     # hours of driving allowed before the 30-minute break is due
     hos_cycle_tomorrow = Column(Float)
+    hos_status_since = Column(DateTime)                # when the current status (off-duty stretch counts as one) began, UTC
+    cycle_confirmed = Column(Boolean)                  # dispatcher answered "yes, working" to the low-cycle question
     notes = Column(String(200))
     driver = relationship("Driver")
 

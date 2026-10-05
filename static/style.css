@@ -118,3 +118,17 @@ table.eldtable td.eld.low { color:#b00020; font-weight:700; }
 .hos-driving { background:#dff3e4; color:#1a7f37; } .hos-onduty { background:#dde8ff; color:#1f4fb3; } .hos-offduty { background:#eceff3; color:#6b7480; } .hos-sleeperberth { background:#ece6f7; color:#5a3d8a; }
 
 .removed-line { display:inline-flex; gap:6px; align-items:center; margin:2px 10px 2px 0; padding:2px 8px; border:1px dashed #cfd6de; border-radius:8px; }
+
+/* time in status, estimates and the low-cycle question (Step 2) */
+table.eldtable .since { font-size:11px; color:#6b7480; margin-top:2px; font-variant-numeric:tabular-nums; }
+table.eldtable .since.resetting { color:#8a6100; } table.eldtable .since.reset-ok { color:#1a7f37; font-weight:600; }
+table.eldtable td.eld.est { color:#3b4652; font-style:italic; }
+table.eldtable td.eld.amber, table.eldtable td.eld.est.amber { background:#fff1c2; color:#8a5a00; font-weight:700; font-style:normal; }
+table.eldtable tr.lowcyc > td:nth-child(-n+2) { background:#fff8e1; }
+table.eldtable .warn-note { font-size:11px; color:#8a5a00; font-weight:600; margin-top:2px; }
+.pill.ok { background:#dff3e4; color:#1a7f37; }
+.notice.warn { margin:8px 0; padding:8px 12px; border-radius:8px; background:#fff1c2; border:1px solid #f0d77a; color:#6b4a00; }
+.lowcycle { margin:10px 0; padding:10px 14px; border:1px solid #f0d77a; border-left:4px solid #e0a800; border-radius:8px; background:#fffbe9; }
+.lowcycle .lc-title { font-weight:700; color:#6b4a00; margin-bottom:6px; }
+.lowcycle .lc-row { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:5px 0; border-top:1px solid #f3e7b5; }
+.lowcycle .lc-btns { display:inline-flex; gap:6px; }

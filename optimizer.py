@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session, joinedload
 from db import Setting, Location, Lane, Distance, Driver, DriverDay, LoadRequest, Plan, Company, CompanyLaneRate, LocationRestriction, Tank, Load
 import fsc as fscmod
 import urgency as urg
+import hos
 from mileage import haversine_miles, STRAIGHT_LINE_FACTOR
 
 HORIZON_MIN = 48 * 60          # plan clock runs from plan-date midnight for 48 hours (PM shifts cross midnight)
@@ -80,17 +81,35 @@ class DayInputs:
         # drivers available today
         dd = {x.driver_id: x for x in s.query(DriverDay).filter(DriverDay.plan_date == plan_date).all()}
         self.drivers = []
-        for d in s.query(Driver).options(joinedload(Driver.yard), joinedload(Driver.company)).filter(Driver.active == True).all():
+        all_drivers = s.query(Driver).options(joinedload(Driver.yard), joinedload(Driver.company)).filter(Driver.active == True).all()
+        proj = hos.project(s, plan_date, all_drivers, st)       # later days: worst-case estimate from today's live Samsara clocks
+        self.hos_est = {}
+        for d in all_drivers:
             x = dd.get(d.id)
+            pj = proj.get(d.id) or {}
             off = self.weekday in (d.days_off or "").split(",")
             available = x.available if x else not off
             if not available or not d.yard: continue
             shift = (x.shift if x else None) or d.usual_shift or "AM"
             default_start = int((st.get("am_start_hour") if shift == "AM" else st.get("pm_start_hour")) or (5 if shift == "AM" else 17)) * 60
             start = hm_to_min(x.start_time if x else None, default_start)
-            drive = int(min(self.drive_cap, ((x.drive_hours_left if x and x.drive_hours_left else None) or d.max_drive_hours or 99) * 60))
-            duty = int(min(self.duty_cap, ((x.duty_hours_left if x and x.duty_hours_left else None) or d.max_duty_hours or 99) * 60))
-            if x and x.cycle_hours_left: duty = int(min(duty, x.cycle_hours_left * 60))
+            if pj.get("kind") == "est":
+                # a later day: full drive/shift after the 10-hour break; the cycle left is the worst-case estimate
+                drive = int(min(self.drive_cap, (d.max_drive_hours or 99) * 60))
+                duty = int(min(self.duty_cap, (d.max_duty_hours or 99) * 60))
+                cyc_left = pj["cycle"]
+                legal = pj.get("legal_start")
+                if legal is not None and not (x and x.start_time):
+                    start = max(start, int(legal))                 # can't start before the 10-hour break after today's (worst-case) shift
+                    if start >= 24 * 60: continue                  # wouldn't be legal to start at all this day
+                self.hos_est[d.id] = dict(cycle=cyc_left, start=start)
+            else:
+                drive = int(min(self.drive_cap, ((x.drive_hours_left if x and x.drive_hours_left else None) or d.max_drive_hours or 99) * 60))
+                duty = int(min(self.duty_cap, ((x.duty_hours_left if x and x.duty_hours_left else None) or d.max_duty_hours or 99) * 60))
+                cyc_left = x.cycle_hours_left if x else None
+            if cyc_left is not None:
+                if cyc_left * 60 < 60: continue                    # under an hour of cycle left: can't be planned
+                duty = int(min(duty, cyc_left * 60)); drive = int(min(drive, cyc_left * 60))
             co = d.company if (d.company and not d.company.is_petrol) else None
             owned = bool(co and co.petrol_owned)
             truck = (d.truck or "").strip().upper() or None
