@@ -162,6 +162,8 @@
 </div>
 <div class="bar">
   <form method="post" action="/day/{{ plan_date }}/samsara" style="display:inline"><button type="submit" class="secondary small" {% if not has_samsara %}disabled title="Add SAMSARA_API_TOKEN under Environment in Render"{% endif %}>Pull hours from Samsara</button></form>
+  <a class="btn secondary small" href="/day/{{ next }}/hours.csv" title="Spreadsheet of every driver's expected hours for {{ next_short }} (estimate: each working driver uses all of {{ weekday }}'s remaining hours). Pull hours from Samsara first so it's current.">⬇ Hours for {{ next_short }}</a>
+  <a class="btn secondary small" href="/day/{{ plan_date }}/hours.csv" title="Spreadsheet of the hours shown in this table">⬇ Hours for {{ short_date }}</a>
   <span class="muted">Untick anyone not working this day. Blank hours = the driver's normal limits.{% if is_today %} Today shows each driver's <b>live</b> clocks.{% elif not is_past %} A later day is <b>estimated</b>: every working driver is assumed to use all of today's remaining hours, then the cycle left is worked out from that. Real numbers replace the estimate once that day arrives and hours are pulled again.{% endif %}</span>
 </div>
 {% if stale_snap and not is_past %}<div class="notice warn">Hours haven't been pulled from Samsara today, so the hours below can't be estimated. Click <b>Pull hours from Samsara</b>.</div>{% endif %}

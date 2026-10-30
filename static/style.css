@@ -28,7 +28,7 @@ input[type=text] { min-width:200px; }
 textarea { width:100%; min-height:60px; }
 button, .btn { padding:7px 12px; border-radius:6px; border:1px solid var(--accent); background:var(--accent); color:#fff; font:inherit; cursor:pointer; text-decoration:none; display:inline-block; }
 button.secondary, .btn.secondary { background:#fff; color:var(--accent); }
-button.small { padding:3px 8px; font-size:12px; }
+button.small, .btn.small { padding:3px 8px; font-size:12px; }
 .form { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; max-width:760px; }
 .form .row { display:grid; grid-template-columns:220px 1fr; gap:10px; align-items:center; margin-bottom:10px; }
 .form .hint { color:var(--muted); font-size:12px; grid-column:2; margin-top:-6px; }

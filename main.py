@@ -818,7 +818,7 @@ def _day_ctx(s: Session, plan_date: str):
     return dict(plan=plan, plan_row=latest, plan_date=plan_date, standing_added=added,
                 today=date.today().isoformat(), tomorrow=(date.today() + timedelta(days=1)).isoformat(),
                 weekday_long=d0.strftime("%A"), pretty_date=d0.strftime("%B %-d, %Y"), short_date=d0.strftime("%b %-d"), weekday=weekday, drv_rows=drv_rows, load_rows=load_rows, tot=tot, lanes_all=lanes_all,
-                prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), fsc_pct=m["fsc"],
+                prev=(d0 - timedelta(days=1)).isoformat(), next=(d0 + timedelta(days=1)).isoformat(), next_short=(d0 + timedelta(days=1)).strftime("%a %b %-d"), fsc_pct=m["fsc"],
                 avail=sum(1 for r in drv_rows if r["available"]), priorities=PRIORITIES, lowcycle=lowcycle, low_thr=low_thr, est_day=est_day, stale_snap=stale_snap, st=m["st"], flex_days=flex_days, leftover=leftover,
                 done_rows=done_rows, active_drivers=active_drivers, last_sync=last_sync, removed_lines=removed_lines,
                 has_samsara=bool(samsara.token()), tanks_by_loc=tanks_by_loc, gaugers_today=gaugers_today, needs_gauge=needs_gauge,
@@ -958,6 +958,94 @@ def load_reopen(load_id: int, s: Session = Depends(get_db)):
         return RedirectResponse(f"/loads/{load_id}?msg={ld.ref}+is+open+again+on+{ld.plan_date}", status_code=303)
     return RedirectResponse(f"/loads/{load_id}", status_code=303)
 
+
+
+# ---------------- Driver hours export (one day, same numbers as Step 2 on the daily plan) ----------------
+STATUS_WORDS = {"driving": "Driving", "onduty": "On duty", "offduty": "Off duty", "sleeperberth": "Sleeper", "sleeperbed": "Sleeper",
+                "yardmove": "Yard move", "personalconveyance": "Personal conveyance"}
+
+
+def driver_hours_rows(s: Session, plan_date: str):
+    """Each active driver's hours for `plan_date`, worked out exactly like the Step 2 table (no side effects)."""
+    st = settings_dict(s)
+    drivers = s.query(Driver).options(joinedload(Driver.yard), joinedload(Driver.company)).filter(Driver.active == True).all()
+    drivers.sort(key=lambda d: (d.is_sub, (d.company.name if d.company else ""), (d.yard.name if d.yard else ""), d.name))
+    dd = {x.driver_id: x for x in s.query(DriverDay).filter(DriverDay.plan_date == plan_date).all()}
+    weekday = DAYS[datetime.strptime(plan_date, "%Y-%m-%d").weekday()]
+    snaps = hos.snapshots(s)
+    proj = hos.project(s, plan_date, drivers, st, snaps)
+    low_thr = float(st.get("low_cycle_hours") or 16)
+    min_off = float(st.get("min_off_hours") or 10)
+    rows = []
+    for d in drivers:
+        x = dd.get(d.id)
+        off_today = weekday in (d.days_off or "").split(",")
+        working = x.available if (x and x.available is not None) else not off_today
+        call = d.is_sub and d.company and not d.company.has_samsara
+        p = proj.get(d.id) or dict(kind=None)
+        snap = snaps.get(d.id) if d.samsara_id else None
+        drive_max = float(d.max_drive_hours or st.get("max_drive_hours") or 10)
+        duty_max = float(d.max_duty_hours or st.get("max_duty_hours") or 16)
+        cycle_max = float(st.get("reset_after_hours") or 80)
+        cycle_after = None
+        if p["kind"] == "live":
+            source = "Samsara live"
+            drive, shift, cycle, cycle_after = snap.hos_drive_left, snap.hos_shift_left, p["cycle"], p["cycle_after"]
+        elif p["kind"] == "est":
+            source = "Estimate (uses all of today's hours)"
+            drive, shift, cycle, cycle_after = p["drive"], p["shift"], p["cycle"], p["cycle_after"]
+        else:
+            typed = x and any(v is not None for v in (x.drive_hours_left, x.duty_hours_left, x.cycle_hours_left))
+            source = ("Typed in" if typed else "Full limits (no hours entered)") + (" - call sub dispatch" if call else "")
+            if d.samsara_id and not call and not typed: source = "Not pulled from Samsara today - full limits assumed"
+            drive = (x.drive_hours_left if x and x.drive_hours_left else drive_max)
+            shift = (x.duty_hours_left if x and x.duty_hours_left else duty_max)
+            cycle = (x.cycle_hours_left if x and x.cycle_hours_left else cycle_max)
+        usable_duty = min(v for v in (shift, cycle) if v is not None) if (shift is not None or cycle is not None) else None
+        usable_drive = min(drive, usable_duty) if (drive is not None and usable_duty is not None) else drive
+        status, in_status = "", ""
+        if snap and snap.hos_status:
+            stt = hos.norm_status(snap.hos_status)
+            status = STATUS_WORDS.get(stt, stt.capitalize())
+            el = hos.status_elapsed_h(snap)
+            if el is not None:
+                in_status = fmt_hm_(el)
+                if stt in hos.OFF_GROUP: in_status += " (reset done)" if el >= min_off else f" (reset in {fmt_hm_(min_off - el)})"
+        legal = p.get("legal_start")
+        legal_txt = ("next day" if legal >= 1440 else hos.fmt_clock(legal)) if legal is not None else ""
+        r2 = lambda v: round(v, 2) if isinstance(v, (int, float)) else ""
+        rows.append({
+            "Date": plan_date, "Driver": d.name, "Company": (d.company.name if d.company else ""), "Yard": (d.yard.name if d.yard else ""),
+            "Truck": d.truck or "", "Gauger": "Yes" if d.can_gauge else "",
+            "Working": ("Yes" if working else ("No (day off)" if off_today and not x else "No")),
+            "Shift": (x.shift if x and x.shift else (d.usual_shift or "AM")), "Start time entered": (x.start_time if x and x.start_time else ""),
+            "Earliest legal start": legal_txt,
+            "Drive hours": r2(drive), "Shift hours": r2(shift), "Cycle hours": r2(cycle),
+            "Usable on-duty hours": r2(usable_duty), "Usable drive hours": r2(usable_drive),
+            "Cycle hours the day after (est)": r2(cycle_after),
+            "Low cycle": ("Yes" if working and cycle is not None and cycle < low_thr else ""),
+            "Confirmed working": ("Yes" if x and x.cycle_confirmed else ""),
+            "Hours source": source, "Status at last pull": status, "Time in status": in_status,
+            "How cycle was figured": p.get("basis", "") if p["kind"] else "",
+            "Note": (x.notes if x and x.notes else ""),
+        })
+    return rows
+
+
+@app.get("/day/{plan_date}/hours.csv")
+def export_driver_hours(plan_date: str, s: Session = Depends(get_db)):
+    import csv, io
+    try: datetime.strptime(plan_date, "%Y-%m-%d")
+    except ValueError: return Response("Bad date", status_code=400)
+    rows = driver_hours_rows(s, plan_date)
+    buf = io.StringIO()
+    buf.write("﻿")                                    # so Excel opens it as UTF-8
+    w = csv.writer(buf)
+    cols = list(rows[0].keys()) if rows else ["Date", "Driver"]
+    w.writerow(cols)
+    for r in rows: w.writerow([r[c] for c in cols])
+    return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="driver-hours-{plan_date}.csv"'})
 
 
 # ---------------- Exports (for moving data into the Shift Planner product) ----------------
